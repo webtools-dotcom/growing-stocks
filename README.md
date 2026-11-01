@@ -20,18 +20,22 @@ A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one qu
 ```bash
 pip install -r requirements.txt
 ```
+
+**Open it like an app (no terminal):** create a desktop shortcut once, then just double-click **Rising Stocks**.
+It starts the app quietly and opens it in its own window; closing the window stops it.
+
 ```bash
-cp .env.example .env
+python make_shortcut.py
 ```
-```bash
-streamlit run app.py
-```
+
+Or double-click `launch.pyw` directly, or run it the developer way: `streamlit run app.py`.
 
 Click **update data**. The first run builds a local database from public sources: ~1.5 years of NSE
 end-of-day prices (~5 min) and the results of every liquid company (~1,500, about 25 min, once). After that a
 daily update takes a minute or two — run it after market close (~7 pm IST), then read the **today** tab.
 
-No API key is needed for market data. `.env` is only for the optional AI brief (your own key).
+No API key is needed for market data. For the optional AI brief, open **settings** (top right), pick a provider
+(Gemini, Anthropic, OpenAI, Groq, OpenRouter), paste your own key and press **test**.
 
 ## Keys and data — bring your own
 
@@ -49,7 +53,10 @@ Everything is stored locally in `data/market.duckdb`. For longer price history (
 python data_sync.py backfill 1100
 ```
 
-Keys live only in your local `.env` (git-ignored) and are never written to disk elsewhere, logged or shown in the UI.
+Your AI key is stored in the operating system's credential store (Windows Credential Manager / macOS Keychain /
+Linux Secret Service) — never in a file, never in the repo, never shown again after saving (only its last 4
+characters). Environment variables or a local `.env` (see `.env.example`) also work and take priority.
+The app only listens on `localhost`, so other devices on your network can't open it.
 
 Public sources are read on your machine, politely (one request at a time, with pauses): NSE announcements
 and event calendar, NSE index lists, and Screener.in company pages. **No market data is stored in or
@@ -91,6 +98,8 @@ python test_rules.py
 | `exit_backtest.py` | exit-rule backtest |
 | `screener_refresh.py` | latest quarters / capex / industry for scanned names |
 | `data_sync.py` | builds/updates the local market database from public sources |
+| `settings.py` | AI provider/model; keys in the OS credential store |
+| `launch.pyw` / `make_shortcut.py` | double-click app window / desktop shortcut |
 | `config.py` | paths and the NSE session |
 | `data/` | your scans, caches, positions and watchlist — local only, never committed |
 

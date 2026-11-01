@@ -17,6 +17,7 @@ from datetime import date, timedelta
 import duckdb
 import pandas as pd
 
+import settings
 from config import DATA, DB, nse_session
 
 BOARD, HISTORY = DATA / "rising_latest.csv", DATA / "rising_history.csv"
@@ -222,7 +223,7 @@ def update():
     print("3/3 scan")
     out = scan()
     pos = DATA / "positions.csv"
-    if pos.exists() and os.getenv("GEMINI_API_KEY"):
+    if pos.exists() and settings.ai_ready():
         from brief import brief  # only calls the LLM when a holding filed something new
         for s in pd.read_csv(pos).symbol:
             try:

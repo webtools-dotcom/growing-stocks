@@ -9,3 +9,4 @@ lxml>=5.2
 python-dotenv>=1.0
 pypdf>=5.0
 litellm==1.105.1  # pinned: supply-chain risk, upgrade deliberately
+keyring>=25

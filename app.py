@@ -13,6 +13,7 @@ import streamlit as st
 import brief  # filings-grounded LLM brief
 import fundamentals  # full financials + growth checklist
 import rising  # exit rule + alert logic (shared with backtests)
+import settings  # API keys in the OS keychain
 from config import DATA, DB, HERE
 
 WATCH, POS = DATA / "watchlist.txt", DATA / "positions.csv"
@@ -218,7 +219,7 @@ def mini(title, fig, col, h=230):
     col.markdown(f'<div class="meta">{title}</div>', unsafe_allow_html=True)
     fig = chart_layout(fig, h)
     fig.update_xaxes(tickangle=0, nticks=5)
-    col.plotly_chart(fig, use_container_width=True, config=PLOT)
+    col.plotly_chart(fig, width="stretch", config=PLOT)
 
 
 def growth_story(fd):
@@ -268,7 +269,7 @@ def growth_story(fd):
             go.Bar(x=cols, y=prof[cols] if prof is not None else None, name="net profit", marker_color=C["green"],
                    hovertemplate="%{x}<br>profit ₹%{y:,.0f} Cr<extra></extra>")])
         fig.update_layout(barmode="group", bargap=.3, bargroupgap=.06, hovermode="closest")
-        st.plotly_chart(chart_layout(fig, 340), use_container_width=True, config=PLOT)
+        st.plotly_chart(chart_layout(fig, 340), width="stretch", config=PLOT)
 
     sec("quality of growth", "is the growth profitable, cash-backed and efficient?")
     c1, c2, c3 = st.columns(3, gap="medium")
@@ -348,10 +349,48 @@ def run_update():
     st.rerun()
 
 
-left, right = st.columns([6, 1])
+@st.dialog("settings", width="large")
+def settings_dialog():
+    st.markdown('<div class="meta">market data needs no key. an AI key is optional — it only powers the filing briefs.</div>',
+                unsafe_allow_html=True)
+    cur = settings.load()
+    names = list(settings.PROVIDERS)
+    prov = st.selectbox("AI provider", names, index=names.index(cur["provider"]))
+    env_var, default_model, key_url = settings.PROVIDERS[prov]
+    model = st.text_input("model", cur["model"] if prov == cur["provider"] else default_model,
+                          disabled=settings.model_locked(),
+                          help="any litellm model id, e.g. " + default_model + (" — pinned by DEFAULT_LLM_MODEL in .env"
+                                                                                 if settings.model_locked() else ""))
+    key = st.text_input(f"API key — {settings.masked(prov)}", type="password", placeholder="paste a new key to save or replace",
+                        help=f"get one at {key_url}")
+    show(f'<div class="note">keys are stored in your operating system\'s credential store (Windows Credential Manager / '
+         f'macOS Keychain), never in a file or the repo, and never shown again. '
+         f'{"" if settings.keychain_ok() else "<span class=dn>no credential store found on this machine — use .env instead.</span>"}</div>')
+    c1, c2, c3 = st.columns(3)
+    if c1.button("save", width="stretch"):
+        settings.save(prov, model, key or None)
+        st.rerun()
+    if c2.button("test", width="stretch", help="sends one tiny request to your provider"):
+        if key:
+            settings.save(prov, model, key)
+        try:
+            from litellm import completion
+            r = completion(model=os.environ["DEFAULT_LLM_MODEL"], messages=[{"role": "user", "content": "reply with: ok"}],
+                           max_tokens=5, timeout=30)
+            st.success(f"works — {os.environ['DEFAULT_LLM_MODEL']} replied “{r.choices[0].message.content.strip()}”")
+        except Exception as e:
+            st.error(f"failed: {str(e)[:300]}")
+    if c3.button("remove key", width="stretch"):
+        settings.save(prov, model, "")
+        st.rerun()
+
+
+left, mid, right = st.columns([6, 1, 1])
+if mid.button("settings", width="stretch"):
+    settings_dialog()
 if b.empty:
     left.markdown('<div class="brand">RISING<span class="dim"> // nse growth terminal</span></div>', unsafe_allow_html=True)
-    if right.button("update data", use_container_width=True):
+    if right.button("update data", width="stretch"):
         run_update()
     show('<div class="flag warn">no data yet — click <b>update data</b>.<br><span class="dim">the first run downloads ~1.5 years of '
          'NSE prices and the results of every liquid company (~1,200) from public sources: about 30 minutes, once. '
@@ -363,7 +402,7 @@ cnt = b.status.value_counts()
 counts = " · ".join(f'{status(s)} <b>{int(cnt.get(s, 0))}</b>' for s in STATUSES)
 left.markdown(f'<div class="bar"><div class="brand">RISING<span class="dim"> // nse growth terminal</span></div>'
               f'<div class="meta">data {asof:%a %d %b %Y} &nbsp;·&nbsp; {counts}</div></div>', unsafe_allow_html=True)
-if right.button("update data", use_container_width=True, help="prices + NSE filings + new results + rescan (≈1–10 min)"):
+if right.button("update data", width="stretch", help="prices + NSE filings + new results + rescan (≈1–10 min)"):
     run_update()
 show('<div class="legend">leader = growing + already ran &gt;80% · emerging = growth accelerating, price confirmed · '
      'wait = watch only, buy above trigger · exit = −20% stop or 6-month review · research tool, not advice</div>')
@@ -413,7 +452,7 @@ with t_today:
                       ("stop", "stop −20%"), ("review", "6m review"), ("st", "status"), ("sig", "signal")],
                numeric={"qty", "buy", "last", "pnl", "stop"}))
     with st.expander("edit positions"):
-        edited = st.data_editor(pos, num_rows="dynamic", use_container_width=True, key="pos_editor",
+        edited = st.data_editor(pos, num_rows="dynamic", width="stretch", key="pos_editor",
                                 column_config={"buy_date": st.column_config.TextColumn("buy_date (YYYY-MM-DD)")})
         if st.button("save positions"):
             edited.dropna(subset=["symbol"]).assign(symbol=lambda d: d.symbol.str.upper().str.strip()).to_csv(POS, index=False)
@@ -521,7 +560,7 @@ with t_stock:
                 fig.add_hline(y=r.trigger, line=dict(color=C["blue"], width=1, dash="dash"),
                               annotation_text="trigger", annotation_font_color=C["blue"])
             sec("price", "1 year · above the 200-day average = uptrend")
-            st.plotly_chart(chart_layout(fig, 280), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(chart_layout(fig, 280), width="stretch", config={"displayModeBar": False})
 
         cached = brief.latest_cached(sym)
         sec("ai brief", "read from the company's own filings · explains, never decides")
@@ -537,8 +576,8 @@ with t_stock:
             st.markdown(md)
             show(f'<div class="note">read {gen:%d %b} · ' + " · ".join(
                 f'<a href="{x["url"]}" target="_blank">{x["id"]} {esc(x["type"]).lower()} {x["date"]}</a>' for x in srcs) + "</div>")
-        elif not os.getenv("GEMINI_API_KEY"):
-            show('<div class="note">add GEMINI_API_KEY to .env to enable briefs</div>')
+        elif not settings.ai_ready():
+            show('<div class="note">add an AI key in <b>settings</b> (top right) to enable briefs</div>')
 
         fl = q("""select cast(filing_datetime as date) date, category, headline from corporate_filings
                   where symbol = ? order by filing_datetime desc limit 20""", [sym])

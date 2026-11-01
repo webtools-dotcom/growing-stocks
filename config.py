@@ -9,6 +9,10 @@ load_dotenv(HERE / ".env")
 
 DATA = HERE / "data"
 DATA.mkdir(exist_ok=True)
+
+import settings  # noqa: E402  (after .env is loaded: env vars override saved settings)
+
+settings.apply()
 DB = DATA / "market.duckdb"  # built by data_sync.py from public NSE files + Screener.in
 
 

@@ -11,7 +11,8 @@ codeFont = "JetBrains Mono:https://fonts.googleapis.com/css2?family=JetBrains+Mo
 baseFontSize = 14
 
 [server]
-headless = false   # open the browser automatically on `streamlit run app.py`
+headless = false     # open the browser automatically on `streamlit run app.py`
+address = "localhost"  # only this computer can open the app (it holds your positions and can use your AI key)
 
 [browser]
 gatherUsageStats = false
