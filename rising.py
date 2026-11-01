@@ -86,6 +86,9 @@ def backtest():
             rows.append(dict(on=on.date(), status=st or "everything else", n=len(sel), held=held,
                              median=r.median(), hit=(r > 0).mean(), p10=r.quantile(.1)))
     d = pd.DataFrame(rows)
+    # saved for the app's scoreboard chart (only seasons with a full 6 months of data afterwards)
+    (DATA / "backtest.json").write_text(d[d.held >= g.HOLD - 5].assign(on=d.on.astype(str)).to_json(orient="records"),
+                                        encoding="utf-8")
     pd.set_option("display.width", 200)
     print(d.assign(**{c: d[c].map("{:+.0%}".format) for c in ["median", "hit", "p10"]}).to_string(index=False))
     full = d[d.held >= g.HOLD - 5]
@@ -240,7 +243,79 @@ def update():
                 brief(s, status=out.set_index("symbol").status.get(s, ""))
             except Exception as e:
                 print(f"   brief {s} failed: {e}")
+
+    # pre-fetch fundamentals (7-day cache) so stock pages open instantly
+    import fundamentals
+    fresh = list(dict.fromkeys(held + watch + list(out[out.status.isin(["LEADER", "EMERGING"])].symbol)))
+    print(f"   fundamentals cache: checking {len(fresh)} names")
+    for s in fresh:
+        try:
+            fundamentals.get(s)
+        except Exception as e:
+            print(f"   fundamentals {s}: {e}")
+
+    bt = DATA / "backtest.json"
+    if not bt.exists() or (pd.Timestamp.now() - pd.Timestamp(bt.stat().st_mtime, unit="s")).days >= 7:
+        print("   weekly scoreboard backtest...")
+        backtest()
+
+    notify_changes(out, held, watch, found if (held or watch) else {})
     return out
+
+
+def notify(title, body):
+    """Desktop notification (Windows toast via PowerShell, no extra packages); elsewhere just printed."""
+    print(f"   notify: {title} — {body}")
+    if sys.platform != "win32":
+        return
+    import subprocess
+    esc = lambda s: s.replace("'", "''").replace("<", "").replace(">", "").replace("&", "and")
+    ps = f"""
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$x = New-Object Windows.Data.Xml.Dom.XmlDocument
+$x.LoadXml('<toast><visual><binding template="ToastGeneric"><text>{esc(title)}</text><text>{esc(body)}</text></binding></visual></toast>')
+$app = '{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($x))
+"""
+    subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def notify_changes(out, held, watch, found):
+    """Toast only what's new since the last notification: exits, triggers, red flags, results tomorrow."""
+    import json
+    seen_p = DATA / "notified.json"
+    seen = set(json.loads(seen_p.read_text())) if seen_p.exists() else set()
+    msgs = []
+    pos = DATA / "positions.csv"
+    if held and pos.exists():
+        con = duckdb.connect(str(DB), read_only=True)
+        for p in pd.read_csv(pos).itertuples():
+            row = con.execute("""select close, trade_date from daily_market join instruments using (isin) where symbol = ?
+                                 order by trade_date desc limit 1""", [p.symbol]).fetchone()
+            if row:
+                st = out.set_index("symbol").status.get(p.symbol, "")
+                for lvl, m in position_alerts(p.buy_price, p.buy_date, row[0], row[1], st):
+                    msgs.append((f"{lvl}:{p.symbol}:{row[1]}", f"{p.symbol}: {lvl.lower()}", m))
+        con.close()
+    for r in out[out.symbol.isin(watch) & (out.prev_status == "WAIT") & out.status.isin(["LEADER", "EMERGING"])].itertuples():
+        msgs.append((f"trig:{r.symbol}:{r.asof}", f"{r.symbol}: trigger crossed", f"now {r.status.lower()} at ₹{r.close:,.1f}"))
+    for s, items in found.items():
+        for i in items:
+            msgs.append((f"flag:{s}:{i['date']}:{i['text'][:40]}", f"{s}: {i['kind']} red flag", i["text"][:120]))
+    cal = DATA / "results_calendar.csv"
+    if cal.exists():
+        c = pd.read_csv(cal, parse_dates=["date"])
+        soon = c[c.symbol.isin(held + watch) & c.date.dt.date.isin([date.today(), date.today() + timedelta(1)])]
+        for r in soon.itertuples():
+            msgs.append((f"res:{r.symbol}:{r.date:%Y%m%d}", f"{r.symbol}: results {r.date:%a %d %b}", "watch the reaction before acting"))
+    new = [m for m in msgs if m[0] not in seen]
+    for key, title, body in new[:5]:
+        notify(title, body)
+    if len(new) > 5:
+        notify(f"{len(new) - 5} more alerts", "open Rising Stocks → today")
+    seen_p.write_text(json.dumps(sorted(seen | {m[0] for m in new})))
 
 
 if __name__ == "__main__":

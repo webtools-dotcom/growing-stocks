@@ -18,6 +18,9 @@ import rising  # exit rule + alert logic (shared with backtests)
 import settings  # API keys in the OS keychain
 from config import DATA, DB, HERE
 from data_sync import adjust_prices
+import insights  # trap scores, capacity bridge, order book, valuation, smart money
+from viz import C, PLOT, STATUS_C, chart_layout
+import viz
 
 WATCH, POS = DATA / "watchlist.txt", DATA / "positions.csv"
 DEFAULT_EXCLUDE = ["Oil Gas & Consumable Fuels", "Information Technology", "Energy"]
@@ -25,10 +28,6 @@ STATUSES = ["LEADER", "EMERGING", "WAIT", "BROKE"]
 CATALYST = ("Capacity addition", "Commencement of commercial production/operations",
             "Bagging/Receiving of orders/contracts", "Outcome of Board Meeting", "Investor Presentation",
             "Acquisition", "Press Release")
-# palette: colour only carries meaning (status, gain/loss); everything else is text or dim text
-C = dict(bg="#0f100d", line="#2a2b24", text="#d6d3c4", dim="#7f7c70", amber="#d9a54b",
-         green="#93b874", blue="#7d9db6", red="#cf7462")
-STATUS_C = {"LEADER": C["amber"], "EMERGING": C["green"], "WAIT": C["blue"], "BROKE": C["red"]}
 
 st.set_page_config("rising · terminal", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(f"""<style>
@@ -110,7 +109,7 @@ def history():
 
 @st.cache_data(ttl=300)
 def prices(symbol):
-    return q("""select d.trade_date, d.close, d.volume, d.delivery_pct from daily_market d join instruments i using(isin)
+    return q("""select d.trade_date, d.close, d.high, d.low, d.volume, d.delivery_pct from daily_market d join instruments i using(isin)
                 where i.symbol = ? and d.trade_date >= current_date - 1100 order by d.trade_date""", [symbol])
 
 
@@ -186,15 +185,6 @@ def show(htm):
     st.markdown(htm, unsafe_allow_html=True)
 
 
-def chart_layout(fig, h=320):
-    fig.update_layout(height=h, margin=dict(l=0, r=0, t=24, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                      font=dict(family="JetBrains Mono, monospace", size=11, color=C["dim"]), hovermode="x unified",
-                      legend=dict(orientation="h", y=1.08, x=0, font=dict(size=10)), showlegend=True)
-    fig.update_xaxes(showgrid=False, linecolor=C["line"])
-    fig.update_yaxes(gridcolor="#1d1e19", zeroline=False)
-    return fig
-
-
 # ---------------------------------------------------------------- growth story (stock tab)
 @st.cache_data(ttl=3600)
 def all_symbols():
@@ -210,7 +200,6 @@ def load_fundamentals(sym):
         return None
 
 
-PLOT = {"displayModeBar": False}
 MARK = {"pass": ("✓", "up"), "watch": ("~", "am"), "fail": ("✗", "dn"), "n/a": ("·", "dim")}
 
 
@@ -277,6 +266,26 @@ def price_chart(sym, r):
                              textposition="middle right", textfont=dict(color=line_c, size=11),
                              marker=dict(color=line_c, size=6), showlegend=False, hoverinfo="skip"), 1, 1)
 
+    # smart money: insider (promoter / director) buys ▲ and sells ▼ placed on the price line, sized by value
+    try:
+        pit = insights.insider_trades(sym)
+    except Exception:
+        pit = pd.DataFrame()
+    if len(pit):
+        pit = pit[(pit.date >= d.trade_date.iloc[0]) & (pit.value_cr >= .05)]
+        on_line = d.set_index("trade_date").close
+        for side, color, sym_ in (("Buy", C["green"], "triangle-up"), ("Sell", C["red"], "triangle-down")):
+            s = pit[pit.side == side]
+            if s.empty:
+                continue
+            y = [on_line.asof(t) for t in s.date]
+            fig.add_trace(go.Scatter(
+                x=s.date, y=y, mode="markers", name=f"insider {side.lower()}s",
+                marker=dict(symbol=sym_, color=color, size=(8 + s.value_cr.clip(upper=200) ** .5 * 2).tolist(),
+                            line=dict(color=C["bg"], width=1)),
+                customdata=list(zip(s.who, s.name.str.title(), s.value_cr.round(2))),
+                hovertemplate=f"{side.lower()}: %{{customdata[1]}} (%{{customdata[0]}})<br>₹%{{customdata[2]:,}} Cr<extra>insider</extra>"), 1, 1)
+
     fig.add_trace(go.Bar(x=d.trade_date, y=d.volume, name="volume", marker_color="#3b3d34", showlegend=False,
                          hovertemplate="%{y:,.0f} shares<extra>volume</extra>"), 2, 1)
 
@@ -293,7 +302,7 @@ def price_chart(sym, r):
     fig.update_yaxes(fixedrange=True, showticklabels=False, showgrid=False, row=2, col=1)
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "scrollZoom": False})
     show('<div class="note">adjusted for splits &amp; bonuses · hover to read any day · green/red = up/down over the chosen range · '
-         'price above the dotted 200-day average = uptrend'
+         'price above the dotted 200-day average = uptrend · ▲▼ = insiders buying / selling (bigger = more money)'
          + (' · amber = your buy, red dashed = your stop' if len(held) else '') + '</div>')
 
 
@@ -319,6 +328,56 @@ def growth_story(fd):
             rows.append(dict(l=label, **{f"c{i}": (pct(x / 100) if pd.notna(x) else '<span class="dim">–</span>') for i, x in enumerate(vals)}))
         show(table(rows, [("l", ""), ("c0", "10y"), ("c1", "5y"), ("c2", "3y"), ("c3", "latest")], numeric={"c0", "c1", "c2", "c3"}))
         show('<div class="note">latest = last 12 months for sales/profit, last year for price and ROE</div>')
+
+    sym = fd["symbol"]
+    px_ = prices(sym)
+    if len(px_):
+        px_ = px_.assign(trade_date=pd.to_datetime(px_.trade_date), close=adjust_prices(px_.close)).dropna(subset=["close"])
+
+    # ---- traps: one safety shape instead of a page of ratios
+    with st.spinner("checking exchange watch-lists and insider trades…"):
+        try:
+            scores = insights.trap_scores(fd, sym, px_ if len(px_) else None)
+        except Exception as e:
+            scores, err = None, e
+    if scores:
+        worst = sorted(scores, key=lambda s: s[1])
+        sec("safety check", "full shape = safe · every dent is a specific risk · hover a point for the evidence")
+        c1, c2 = st.columns([3, 2], gap="large")
+        c1.plotly_chart(viz.trap_radar(scores), width="stretch", config=PLOT)
+        with c2:
+            show(table([dict(s=f'<span style="color:{viz.score_color(s)}">{s}</span>', a=esc(a), _wrap=esc(d)) for a, s, d in worst],
+                       [("s", "score"), ("a", "check"), ("_wrap", "evidence")], numeric={"s"}))
+            bad = [a for a, s, _ in worst if s < 40]
+            show(f'<div class="note">{"⚠ weak spots: <b>" + ", ".join(bad) + "</b> — read these before buying" if bad else "no weak spots found"}</div>')
+
+    # ---- future growth: capacity coming online + revenue already booked
+    bridge = insights.capacity_bridge(fd)
+    try:
+        orders = insights.order_book(sym)
+    except Exception:
+        orders = dict(book=None, wins=[])
+    has_cap = bridge and bridge["potential_add"] > 0.02 * bridge["ttm_sales"]
+    if has_cap or orders["book"] or orders["wins"]:
+        sec("future growth", "plants being built and orders already won — growth that hasn't shown up in sales yet")
+        c1, c2 = st.columns([3, 2], gap="large")
+        if has_cap:
+            with c1:
+                show('<div class="meta">capacity → sales: what the plants under construction could add</div>')
+                st.plotly_chart(viz.capacity_waterfall(bridge), width="stretch", config=PLOT)
+                show(f'<div class="note">₹{bridge["cwip"]:,.0f} Cr of plant under construction × ₹{bridge["turnover"]:.1f} of sales '
+                     f'per ₹1 of plant today. A rough ceiling, reached only when the plants run full — check the AI brief '
+                     f'or filings for commissioning dates.</div>')
+        with c2 if has_cap else c1:
+            if orders["book"] and bridge:
+                b_ = orders["book"]
+                show(f'<div class="meta">order book: years of sales already booked</div>')
+                st.plotly_chart(viz.order_gauge(b_["value_cr"], bridge["ttm_sales"]), width="stretch", config=PLOT)
+                show(f'<div class="note">₹{b_["value_cr"]:,} Cr order book (<a href="{b_["url"]}" target="_blank">'
+                     f'{esc(b_["source"]).lower()}, {b_["date"]}</a>) vs ₹{bridge["ttm_sales"]:,.0f} Cr sales in the last 12 months</div>')
+            if orders["wins"]:
+                show('<div class="meta">order wins announced</div>')
+                st.plotly_chart(viz.order_wins(orders["wins"]), width="stretch", config=PLOT)
 
     # revenue & profit with the yoy growth printed on every bar
     h1, h2 = st.columns([4, 1])
@@ -348,14 +407,13 @@ def growth_story(fd):
 
     sec("quality of growth", "is the growth profitable, cash-backed and efficient?")
     c1, c2, c3 = st.columns(3, gap="medium")
-    opm = _r(T.get("quarters"), "OPM %")
-    if opm is not None:
-        x = list(opm.index)[-12:]
-        fig = go.Figure(go.Scatter(x=x, y=opm[x], mode="lines+markers", name="operating margin",
-                                   line=dict(color=C["amber"], width=1.5), marker=dict(size=4),
-                                   hovertemplate="%{x}: %{y:.1f}%<extra></extra>"))
-        fig.update_yaxes(ticksuffix="%")
-        mini("operating margin · quarterly", fig, c1)
+    band = insights.margin_band(fd)
+    if band:
+        df, state = band
+        c1.markdown(f'<div class="meta">operating margin vs its usual range · <span class="'
+                    f'{"up" if state == "breakout" else "dn" if state == "breakdown" else "dim"}">{state}</span></div>',
+                    unsafe_allow_html=True)
+        c1.plotly_chart(viz.margin_band_chart(df.tail(12), 230), width="stretch", config=PLOT)
     cfo, npa = _r(T.get("cashflow"), "Cash from Operating Activity"), _r(T.get("annual"), "Net Profit")
     if cfo is not None and npa is not None:
         yrs = [c for c in cfo.index if c in npa.index][-6:]
@@ -373,6 +431,26 @@ def growth_story(fd):
         fig.add_hline(y=15, line=dict(color=C["dim"], width=1, dash="dot"), annotation_text="15%", annotation_font_color=C["dim"])
         fig.update_yaxes(ticksuffix="%")
         mini("return on capital · yearly", fig, c3)
+
+    # ---- valuation: is the growth already in the price?
+    pe = insights.pe_history(fd, px_[["trade_date", "close"]]) if len(px_) else None
+    if pe is not None and len(pe) > 60:
+        g3 = fd.get("growth", {}).get("Compounded Profit Growth", {}).get("3 Years")
+        peg = pe.iloc[-1] / g3 if g3 and g3 > 0 else None
+        rel = pe.iloc[-1] / pe.median() - 1
+        sec("is the growth already priced in?", "P/E = price ÷ yearly profit per share · lower vs its own history = cheaper")
+        c1, c2 = st.columns([3, 2], gap="large")
+        c1.plotly_chart(viz.pe_chart(pe), width="stretch", config=PLOT)
+        with c2:
+            show(table([dict(k="P/E today", v=f"{pe.iloc[-1]:.0f}"),
+                        dict(k="its usual P/E", v=f"{pe.median():.0f}"),
+                        dict(k="vs usual", v=(f'<span class="{"dn" if rel > .15 else "up" if rel < -.1 else "am"}">'
+                                              f'{abs(rel):.0%} {"above" if rel > 0 else "below"}</span>') if pd.notna(rel) else "–"),
+                        dict(k="profit growth (3y/yr)", v=f"{g3:.0f}%" if g3 else "–"),
+                        dict(k="PEG (P/E ÷ growth)", v=f'<span class="{"up" if peg and peg < 1 else "am" if peg and peg < 2 else "dn"}">{peg:.1f}</span>' if peg else "–")],
+                       [("k", ""), ("v", "")], numeric={"v"}))
+            show('<div class="note">PEG under 1 = paying less than its growth rate; over 2 = a lot of future growth is already in the price. '
+                 '"vs usual" is green when it\'s cheaper than its own history.</div>')
 
     sec("balance sheet & owners", "is it building capacity, and who is holding?")
     c1, c2, c3 = st.columns(3, gap="medium")
@@ -397,14 +475,11 @@ def growth_story(fd):
                                     line=dict(color=C["text"], width=1.5), hovertemplate="%{x}: equity ₹%{y:,.0f} Cr<extra></extra>")])
         mini("debt vs shareholders' money", fig, c2)
     sh = T.get("shareholding")
-    if sh is not None:
-        x = list(sh.columns)[-10:]
-        fig = go.Figure([go.Scatter(x=x, y=sh.loc[k, x], name=k.lower(), mode="lines", line=dict(color=c_, width=1.5),
-                                    hovertemplate="%{x}: %{y:.1f}%<extra>" + k + "</extra>")
-                         for k, c_ in [("Promoters", C["amber"]), ("FIIs", C["blue"]), ("DIIs", C["green"]), ("Public", C["dim"])]
-                         if k in sh.index])
-        fig.update_yaxes(ticksuffix="%")
-        mini("who owns it · quarterly %", fig, c3)
+    ch = insights.ownership_changes(fd)
+    if ch is not None:
+        now_ = " · ".join(f"{k.lower()} {sh.loc[k].iloc[-1]:.1f}%" for k in ("Promoters", "FIIs", "DIIs") if k in sh.index)
+        c3.markdown(f'<div class="meta">smart money: change in ownership each quarter<br>{now_}</div>', unsafe_allow_html=True)
+        c3.plotly_chart(viz.ownership_change_bars(ch, 230), width="stretch", config=PLOT)
 
 
 # ---------------------------------------------------------------- guards + header
@@ -494,10 +569,26 @@ if asof.date() < expected:
 excl = st.session_state.get("excl", [i for i in DEFAULT_EXCLUDE if i in set(b.industry.dropna())])
 watch = WATCH.read_text().split() if WATCH.exists() else []
 pos = pd.read_csv(POS) if POS.exists() else pd.DataFrame(columns=["symbol", "buy_date", "buy_price", "qty"])
+if "thesis" not in pos:
+    pos["thesis"] = ""
+pos["thesis"] = pos.thesis.fillna("").astype(str)
+THESIS = DATA / "thesis"
+
+
+def snapshot_thesis(sym, thesis):
+    """Freeze the growth check when you write why you bought, so it can be compared every quarter."""
+    THESIS.mkdir(exist_ok=True)
+    p_ = THESIS / f"{sym}.json"
+    old = json.loads(p_.read_text(encoding="utf-8")) if p_.exists() else None
+    if old and old.get("thesis") == thesis:
+        return
+    f = fundamentals.get(sym)
+    checks = {t_: v_ for v_, t_, _ in fundamentals.checklist(f)} if f else {}
+    p_.write_text(json.dumps(dict(thesis=thesis, date=str(pd.Timestamp.now().date()), checks=checks)), encoding="utf-8")
 bs = b.set_index("symbol")
 
-t_today, t_board, t_stock, t_sec, t_fil, t_watch, t_hist = st.tabs(
-    ["today", "board", "stock", "sectors", "filings", "watchlist", "history"])
+t_today, t_board, t_stock, t_cmp, t_sec, t_fil, t_watch, t_hist = st.tabs(
+    ["today", "board", "stock", "compare", "themes", "filings", "watchlist", "scoreboard"])
 
 # ---------------------------------------------------------------- today
 with t_today:
@@ -528,10 +619,37 @@ with t_today:
                numeric={"qty", "buy", "last", "pnl", "stop"}))
     with st.expander("edit positions"):
         edited = st.data_editor(pos, num_rows="dynamic", width="stretch", key="pos_editor",
-                                column_config={"buy_date": st.column_config.TextColumn("buy_date (YYYY-MM-DD)")})
+                                column_config={"buy_date": st.column_config.TextColumn("buy_date (YYYY-MM-DD)"),
+                                               "thesis": st.column_config.TextColumn("why I bought (one line)", width="large")})
         if st.button("save positions"):
-            edited.dropna(subset=["symbol"]).assign(symbol=lambda d: d.symbol.str.upper().str.strip()).to_csv(POS, index=False)
+            edited = edited.dropna(subset=["symbol"]).assign(symbol=lambda d: d.symbol.str.upper().str.strip(),
+                                                             thesis=lambda d: d.thesis.fillna("").astype(str))
+            edited.to_csv(POS, index=False)
+            for r_ in edited.itertuples():
+                if r_.thesis.strip():
+                    snapshot_thesis(r_.symbol, r_.thesis.strip())
             st.rerun()
+
+    # thesis health: the growth check when you bought vs now
+    rows_t = []
+    for r_ in pos.itertuples():
+        p_ = THESIS / f"{r_.symbol}.json"
+        if not r_.thesis.strip() or not p_.exists():
+            continue
+        snap = json.loads(p_.read_text(encoding="utf-8"))
+        f_ = load_fundamentals(r_.symbol)
+        now_c = {t_: v_ for v_, t_, _ in fundamentals.checklist(f_)} if f_ else {}
+        dot = lambda v_: f'<span class="{MARK.get(v_, ("·", "dim"))[1]}">●</span>'
+        worse = [t_ for t_, v_ in snap["checks"].items() if v_ == "pass" and now_c.get(t_) in ("fail", "watch")]
+        rows_t.append(dict(sym=f"<b>{esc(r_.symbol)}</b>", th=f'<span class="dim">{esc(r_.thesis)}</span>',
+                           then="".join(dot(v_) for v_ in snap["checks"].values()),
+                           now="".join(dot(now_c.get(t_, "n/a")) for t_ in snap["checks"]),
+                           v=('<span class="dn">weakened: ' + esc(", ".join(worse)) + "</span>") if worse else '<span class="up">intact</span>'))
+    if rows_t:
+        sec("thesis health", "growth check when you bought vs now · each dot is one check (green pass · amber watch · red fail)")
+        show(table(rows_t, [("sym", "symbol"), ("th", "why you bought"), ("then", "then"), ("now", "now"), ("v", "verdict")]))
+    elif len(pos):
+        show('<div class="note">tip: add "why I bought" in <b>edit positions</b> — the app will tell you each quarter whether that reason still holds</div>')
     for s in pos.symbol:
         c = brief.latest_cached(s)
         if c and (pd.Timestamp.now().date() - c[0]).days <= 7:
@@ -597,9 +715,16 @@ with t_board:
         v = v[v.close <= max_px]
     if hide_lumpy and "lumpy" in v:
         v = v[~v.lumpy.fillna(False).astype(bool)]
-    sec("board", f"{len(v)} of {len(b)} · sorted by status, then score")
+    try:
+        surv = insights.surveillance()
+    except Exception:
+        surv = {}
+    n_surv = int(v.symbol.isin(surv).sum())
+    sec("board", f"{len(v)} of {len(b)} · sorted by status, then score"
+        + (f" · {n_surv} on NSE's surveillance list (⚠ = extra risk: price limits, operator activity)" if n_surv else ""))
     show(table([dict(st=status(r.status) + (' <span class="am">new</span>' if r.new and r.status != "BROKE" else ""),
-                     sym=f"<b>{esc(r.symbol)}</b>", ind=f'<span class="dim">{esc(r.industry) if pd.notna(r.industry) else "–"}</span>',
+                     sym=f"<b>{esc(r.symbol)}</b>" + (' <span class="dn" title="on NSE surveillance list">⚠ watch-list</span>'
+                                                      if r.symbol in surv else ""), ind=f'<span class="dim">{esc(r.industry) if pd.notna(r.industry) else "–"}</span>',
                      c=num(r.close), d=pct(r.chg1d, 1), q=f'<span class="dim">{pd.Timestamp(r.qtr):%b %y}</span>' if pd.notna(r.qtr) else "",
                      s=pct(r.sales_yoy), p=pct(r.pat_yoy), cap="yes" if r.capex is True or r.capex == "True" else '<span class="dim">–</span>',
                      pe=num(r.pe, 0), y=pct(r.ret1y), t=num(r.trigger), m=num(r.market_cap_cr, 0))
@@ -666,6 +791,45 @@ with t_stock:
         show(table([dict(d=f"{pd.Timestamp(x.date):%d %b}", c=esc(x.category).lower(), _wrap=esc(str(x.headline)[:140]))
                     for x in fl.itertuples()], [("d", "date"), ("c", "type"), ("_wrap", "headline")]))
 
+# ---------------------------------------------------------------- compare
+with t_cmp:
+    default = [s for s in pos.symbol if s in set(syms)][:3] or list(v.symbol[:2])
+    picks = st.multiselect("compare up to 3 stocks", syms, default=default, max_selections=3)
+    data = {s: load_fundamentals(s) for s in picks}
+    data = {s: f for s, f in data.items() if f}
+    if len(data) >= 2:
+        prof = {s: insights.compare_profile(f) for s, f in data.items()}
+        sec("profile", "bigger shape = faster growth, better quality, more capacity coming · hover for the numbers")
+        c1, c2 = st.columns([3, 2], gap="large")
+        c1.plotly_chart(viz.compare_radar({s: p[0] for s, p in prof.items()}), width="stretch", config=PLOT)
+        fmt_raw = {"sales growth": lambda x: f"{x:+.0f}%", "profit growth": lambda x: f"{x:+.0f}%", "margin": lambda x: f"{x:.1f}%",
+                   "return on capital": lambda x: f"{x:.0f}%", "cash backs profit": lambda x: f"{x:.0%}",
+                   "debt/equity": lambda x: f"{x:.2f}", "capacity coming": lambda x: f"{x:+.0%}"}
+        with c2:
+            show(table([dict(k=k, **{s: (fmt_raw[k](p[1][k]) if p[1][k] is not None and pd.notna(p[1][k]) else "–")
+                                     for s, p in prof.items()}) for k in fmt_raw],
+                       [("k", "")] + [(s, f"<b>{s}</b>") for s in prof], numeric=set(prof)))
+            show('<div class="note">sales/profit growth = last 12 months vs the 12 before · margin = last 4 quarters · '
+                 'capacity coming = potential sales from plants under construction</div>')
+
+        sec("growth race", "quarterly sales, indexed to 100 at the start — who is compounding faster?")
+        series = {}
+        for s, f in data.items():
+            q_ = f["tables"].get("quarters")
+            if q_ is not None and "Sales" in q_.index:
+                ss = q_.loc["Sales"].dropna().tail(12)
+                series[s] = ss / ss.iloc[0] * 100
+        c1, c2 = st.columns(2, gap="large")
+        if series:
+            c1.plotly_chart(viz.compare_lines(series), width="stretch", config=PLOT)
+        margins = {s: f["tables"]["quarters"].loc["OPM %"].dropna().tail(12) for s, f in data.items()
+                   if "OPM %" in f["tables"]["quarters"].index}
+        if margins:
+            c2.markdown('<div class="meta">operating margin % · quarterly</div>', unsafe_allow_html=True)
+            c2.plotly_chart(viz.compare_lines(margins, suffix="%"), width="stretch", config=PLOT)
+    else:
+        show('<div class="empty">pick at least two stocks</div>')
+
 # ---------------------------------------------------------------- sectors
 with t_sec:
     s = b[b.status != "BROKE"].copy()
@@ -674,7 +838,11 @@ with t_sec:
                                   e=("status", lambda x: (x == "EMERGING").sum()), w=("status", lambda x: (x == "WAIT").sum()),
                                   m3=("ret3m", "median"), sy=("sales_yoy", "median"),
                                   names=("symbol", lambda x: ", ".join(x[:8]))).sort_values("n", ascending=False)
-    sec("sectors", "many names in one industry = a sector tailwind")
+    sec("themes", "box size = how many rising companies an industry holds · colour = 3-month price move · click to zoom in")
+    st.plotly_chart(viz.themes_treemap(b), width="stretch", config=PLOT)
+    show('<div class="note">many rising names in one industry = a theme with a tailwind (like telecom for STLTECH / HFCL). '
+         'green boxes are already moving; dark ones are growing but not yet noticed.</div>')
+    sec("by industry")
     show(table([dict(i=esc(i), n=r.n, l=f'<span style="color:{C["amber"]}">{r.l}</span>', e=f'<span class="up">{r.e}</span>',
                      w=f'<span style="color:{C["blue"]}">{r.w}</span>', m3=pct(r.m3), sy=pct(r.sy), _wrap=esc(r.names))
                 for i, r in g.iterrows()],
@@ -721,8 +889,15 @@ with t_watch:
 
 # ---------------------------------------------------------------- history
 with t_hist:
+    bt = DATA / "backtest.json"
+    if bt.exists():
+        rows = json.loads(bt.read_text(encoding="utf-8"))
+        sec("does it work? backtest", "median 6-month return of each label vs every other stock · bought at each results season")
+        st.plotly_chart(viz.scoreboard(rows), width="stretch", config=PLOT)
+        show('<div class="note">tall amber/green bars above the grey "everything else" bar = the labels picked better than the market. '
+             'small sample (2 years, mostly rising) — the live record below is the real test.</div>')
     h = history()
-    sec("track record", "how each name did after it first appeared — the live forward test")
+    sec("live track record", "how each name did after it first appeared on the board")
     if len(h):
         d = h[h.status != "BROKE"].groupby("symbol").agg(first=("asof", "min"), scans=("asof", "nunique"),
                                                           c0=("close", "first"), last=("status", "last"))

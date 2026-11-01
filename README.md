@@ -8,6 +8,19 @@ A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one qu
   leverage, margins, cash vs profit, ROCE, debt, capacity build-up, promoter holding, receivables) plus
   interactive charts: revenue & profit with year-on-year growth on every bar, margins, cash vs profit,
   return on capital, capacity under construction, debt vs equity, shareholding
+- **See it, don't read it** — every signal is a picture you can hover:
+  - *safety radar*: 7 trap checks (NSE surveillance list, cash vs profit, receivables, real dilution, insider
+    selling, core profit, liquidity/circuit-locks) as one shape — every dent is a named risk
+  - *future growth*: a waterfall from today's sales to what the plants under construction could add, an
+    order-book gauge (years of revenue already booked) and order wins
+  - *margin breakout*: operating margin against its own 3-year range
+  - *priced in?*: P/E through time vs its usual level, plus PEG
+  - *smart money*: insider buys/sells marked on the price chart, ownership change each quarter
+- **Themes** — treemap of industries by how many rising companies they hold, coloured by momentum
+- **Compare** — 2–3 stocks on one growth/quality radar plus a sales "growth race"
+- **Scoreboard** — how each label did in the backtest vs every other stock, and the live track record
+- **Thesis tracker** — write why you bought; each quarter it shows whether that reason still holds
+- **Desktop notifications** — stop hit, trigger crossed, red flag, results tomorrow (Windows)
 - **Today** — your positions with a backtested exit rule, what changed since yesterday, results coming up
 - **AI brief** (optional, your own key) — explains every chart in plain English and why the company is growing,
   using its NSE filings, red-flag announcements and news headlines. Pre-digested locally so a brief costs ~5k
@@ -95,6 +108,8 @@ python test_rules.py
 | `app.py` | the Streamlit UI |
 | `rising.py` | daily update, scan, status rules, exit rule |
 | `fundamentals.py` | full financials per stock + the growth checklist |
+| `insights.py` | trap scores, capacity bridge, order book, margin band, P/E history, insider trades |
+| `viz.py` | every chart builder + the palette |
 | `brief.py` | AI brief that explains the charts; filings, red flags and news pre-digested locally (~3k input tokens), cached until inputs change; daily bad-news alerts |
 | `growth_screen.py` | loads data, growth features, first backtest |
 | `exit_backtest.py` | exit-rule backtest |
