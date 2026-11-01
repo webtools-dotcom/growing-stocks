@@ -1,5 +1,6 @@
 """Rising Stocks Terminal. Run:  streamlit run app.py"""
 import html
+import json
 import os
 import subprocess
 import sys
@@ -534,10 +535,19 @@ with t_today:
     for s in pos.symbol:
         c = brief.latest_cached(s)
         if c and (pd.Timestamp.now().date() - c[0]).days <= 7:
-            with st.expander(f"new filings brief — {s} — read {c[0]:%d %b}"):
+            with st.expander(f"new brief — {s} — written {c[0]:%d %b}"):
                 st.markdown(c[1])
-                show('<div class="note">' + " · ".join(f'<a href="{x["url"]}" target="_blank">{x["id"]} {esc(x["type"]).lower()} {x["date"]}</a>'
-                                                        for x in c[2]) + "</div>")
+
+    al_path = DATA / "alerts.json"
+    if al_path.exists():
+        al = json.loads(al_path.read_text(encoding="utf-8"))
+        sec("news & red flags", f"holdings + watchlist · last {al['days']} days · checked {al['checked']} · no AI")
+        rows = [dict(sym=f"<b>{esc(s)}</b>" + (' <span class="am">holding</span>' if s in set(pos.symbol) else ""),
+                     d=esc(i["date"]), k=f'<span class="{"dn" if i["kind"] == "news" else "am"}">{i["kind"]}</span>',
+                     _wrap=f'<a href="{i["url"]}" target="_blank">{esc(i["text"][:150])}</a>')
+                for s, items in sorted(al["items"].items(), key=lambda kv: kv[0] not in set(pos.symbol)) for i in items]
+        show(table(rows, [("sym", "symbol"), ("d", "date"), ("k", "type"), ("_wrap", "what")]) if rows
+             else '<div class="empty">nothing worrying found</div>')
 
     up = b[b.status.isin(["LEADER", "EMERGING"]) & ~b.industry.isin(excl)]
     changes = [("new on board", up[up.new.astype(bool) & (up.prev_status != "WAIT")]),
@@ -627,19 +637,26 @@ with t_stock:
             show('<div class="note">no fundamentals page found for this symbol</div>')
 
         cached = brief.latest_cached(sym)
-        sec("ai brief", "read from the company's own filings · explains, never decides")
-        if st.button("refresh brief" if cached else "generate brief", key=f"brief_{sym}"):
-            with st.spinner("reading filings — 20–60 s"):
+        sec("ai brief — what these charts mean", "explains, never decides · numbers & filings pre-digested locally to save tokens")
+        if st.button("update brief" if cached else "generate brief", key=f"brief_{sym}", disabled=not settings.ai_ready(),
+                     help="re-reads filings, results and news; the AI is only called if something changed"):
+            with st.spinner("reading results, filings and news — 20–60 s"):
                 try:
-                    brief.brief(sym, status=r.get("status", ""), force=bool(cached))
+                    brief.brief(sym, status=r.get("status", ""))
                     cached = brief.latest_cached(sym)
                 except Exception as e:
                     show(f'<div class="flag">brief failed: {esc(e)}</div>')
         if cached:
-            gen, md, srcs = cached
+            gen, md, srcs, usage = cached
             st.markdown(md)
-            show(f'<div class="note">read {gen:%d %b} · ' + " · ".join(
-                f'<a href="{x["url"]}" target="_blank">{x["id"]} {esc(x["type"]).lower()} {x["date"]}</a>' for x in srcs) + "</div>")
+            link = lambda x, label: f'<a href="{x["url"]}" target="_blank">{label}</a>'
+            groups = [("filings", [link(x, f'{x["id"]} {esc(x["type"]).lower()} {x["date"]}') for x in srcs if x["id"][0] == "D"]),
+                      ("red flags", [link(x, f'{x["id"]} {x["date"]}') for x in srcs if x["id"][0] == "R"]),
+                      ("news", [('<span class="dn">' if x["type"] == "negative news" else "<span>")
+                                + link(x, f'{x["id"]} {esc(x.get("title", ""))[:70]}') + "</span>" for x in srcs if x["id"][0] == "N"])]
+            cost = f' · {usage["input"]:,} + {usage["output"]:,} tokens' if usage.get("input") else ""
+            show(f'<div class="note">written {gen:%d %b}{cost} · sources: [F] = the numbers in the charts above<br>'
+                 + "<br>".join(f"{g}: " + " · ".join(items) for g, items in groups if items) + "</div>")
         elif not settings.ai_ready():
             show('<div class="note">add an AI key in <b>settings</b> (top right) to enable briefs</div>')
 

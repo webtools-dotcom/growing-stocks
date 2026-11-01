@@ -223,6 +223,16 @@ def update():
     print("3/3 scan")
     out = scan()
     pos = DATA / "positions.csv"
+    held = list(pd.read_csv(pos).symbol) if pos.exists() else []
+    watch = (DATA / "watchlist.txt").read_text().split() if (DATA / "watchlist.txt").exists() else []
+    if held or watch:  # bad-news check: red-flag filings + negative headlines, no AI tokens
+        from brief import alerts
+        con = duckdb.connect(str(DB), read_only=True)
+        names = dict(con.execute("select symbol, company_name from instruments").fetchall())
+        con.close()
+        found = alerts(list(dict.fromkeys(held + watch)), names)
+        print(f"   alerts: {sum(map(len, found.values()))} red flags / negative headlines in the last 14 days"
+              + (f" ({', '.join(found)})" if found else ""))
     if pos.exists() and settings.ai_ready():
         from brief import brief  # only calls the LLM when a holding filed something new
         for s in pd.read_csv(pos).symbol:
