@@ -9,7 +9,10 @@ A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one qu
   interactive charts: revenue & profit with year-on-year growth on every bar, margins, cash vs profit,
   return on capital, capacity under construction, debt vs equity, shareholding
 - **Today** — your positions with a backtested exit rule, what changed since yesterday, results coming up
-- **AI brief** (optional, your own key) — reads the company's own NSE filings and writes a cited summary:
+- **AI brief** (optional, your own key) — explains every chart in plain English and why the company is growing,
+  using its NSE filings, red-flag announcements and news headlines. Pre-digested locally so a brief costs ~5k
+  tokens (free tiers work) and is only regenerated when something changes. It explains; it never picks stocks
+- **Bad-news alerts** — red-flag filings and negative headlines for your holdings and watchlist, daily, no AI
   why it's growing, capacity & demand, margins, red flags. It explains; it never picks stocks
 
 > **Not investment advice.** This is a personal research tool, not a SEBI-registered advisor. Labels come
@@ -93,7 +96,7 @@ python test_rules.py
 | `app.py` | the Streamlit UI |
 | `rising.py` | daily update, scan, status rules, exit rule |
 | `fundamentals.py` | full financials per stock + the growth checklist |
-| `brief.py` | AI brief from NSE filing PDFs (cached per filing) |
+| `brief.py` | AI brief that explains the charts; filings, red flags and news pre-digested locally (~3k input tokens), cached until inputs change; daily bad-news alerts |
 | `growth_screen.py` | loads data, growth features, first backtest |
 | `exit_backtest.py` | exit-rule backtest |
 | `screener_refresh.py` | latest quarters / capex / industry for scanned names |
