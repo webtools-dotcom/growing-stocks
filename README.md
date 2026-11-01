@@ -13,7 +13,6 @@ A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one qu
   using its NSE filings, red-flag announcements and news headlines. Pre-digested locally so a brief costs ~5k
   tokens (free tiers work) and is only regenerated when something changes. It explains; it never picks stocks
 - **Bad-news alerts** — red-flag filings and negative headlines for your holdings and watchlist, daily, no AI
-  why it's growing, capacity & demand, margins, red flags. It explains; it never picks stocks
 
 > **Not investment advice.** This is a personal research tool, not a SEBI-registered advisor. Labels come
 > from a small backtest (2024–2026, mostly a rising market). Do your own research; markets can lose you money.
