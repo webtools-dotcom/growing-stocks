@@ -1,0 +1,20 @@
+[theme]
+base = "dark"
+primaryColor = "#d9a54b"
+backgroundColor = "#0f100d"
+secondaryBackgroundColor = "#171813"
+textColor = "#d6d3c4"
+borderColor = "#2a2b24"
+baseRadius = "none"
+font = "JetBrains Mono:https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
+codeFont = "JetBrains Mono:https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
+baseFontSize = 14
+
+[server]
+headless = false   # open the browser automatically on `streamlit run app.py`
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

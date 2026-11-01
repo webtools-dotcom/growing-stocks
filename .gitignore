@@ -1,0 +1,15 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# personal data, caches and scraped data — never publish (source terms + privacy)
+data/
+*.csv
+report_*.md
+
+# local tooling
+.venv/
+__pycache__/
+*.py[cod]
+.claude/

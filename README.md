@@ -1,0 +1,99 @@
+# Rising Stocks Terminal
+
+A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one question every day:
+**which companies are really growing, and is the market starting to notice?**
+
+- **Board** — every listed company scanned daily; labelled by backtested rules (leader / emerging / wait)
+- **Growth story** for any stock — a 10-point plain-English growth check (sales every quarter, operating
+  leverage, margins, cash vs profit, ROCE, debt, capacity build-up, promoter holding, receivables) plus
+  interactive charts: revenue & profit with year-on-year growth on every bar, margins, cash vs profit,
+  return on capital, capacity under construction, debt vs equity, shareholding
+- **Today** — your positions with a backtested exit rule, what changed since yesterday, results coming up
+- **AI brief** (optional, your own key) — reads the company's own NSE filings and writes a cited summary:
+  why it's growing, capacity & demand, margins, red flags. It explains; it never picks stocks
+
+> **Not investment advice.** This is a personal research tool, not a SEBI-registered advisor. Labels come
+> from a small backtest (2024–2026, mostly a rising market). Do your own research; markets can lose you money.
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+```
+```bash
+cp .env.example .env
+```
+```bash
+streamlit run app.py
+```
+
+Click **update data**. The first run builds a local database from public sources: ~1.5 years of NSE
+end-of-day prices (~5 min) and the results of every liquid company (~1,500, about 25 min, once). After that a
+daily update takes a minute or two — run it after market close (~7 pm IST), then read the **today** tab.
+
+No API key is needed for market data. `.env` is only for the optional AI brief (your own key).
+
+## Keys and data — bring your own
+
+| Data | Source | Key |
+|---|---|---|
+| prices, volume, delivery % | NSE daily bhavcopy (public archive) | none |
+| listed companies, ISINs | NSE equity list | none |
+| quarterly/annual results, balance sheet, cash flow, shareholding | Screener.in company pages | none |
+| announcements, results calendar, industry lists | NSE public APIs / archives | none |
+| AI brief (optional) | your LLM provider via litellm | `GEMINI_API_KEY` (yours) |
+
+Everything is stored locally in `data/market.duckdb`. For longer price history (the backtests use ~3 years):
+
+```bash
+python data_sync.py backfill 1100
+```
+
+Keys live only in your local `.env` (git-ignored) and are never written to disk elsewhere, logged or shown in the UI.
+
+Public sources are read on your machine, politely (one request at a time, with pauses): NSE announcements
+and event calendar, NSE index lists, and Screener.in company pages. **No market data is stored in or
+distributed with this repository.** Respect each source's terms of use; this tool is for personal research.
+
+## How the labels work
+
+| Label | Rule | Backtest, next 6 months (median) |
+|---|---|---|
+| leader | 2+ strong growth quarters, price near highs and above its 200-day average, already up >80% in a year | +28% |
+| emerging | growth accelerating, margins up, price confirmed, up <80% in a year | beat the rest of the market in every season with 20+ names |
+| wait | growth accelerating but price not confirmed — *trigger* = price to close above | −6% (watch only) |
+| broke | dropped off the board since the last scan | |
+
+Exit rule (tested against trailing stops and moving-average exits, which did worse): sell if price falls 20%
+below your buy price; at 6 months keep only if still leader/emerging.
+
+Reproduce the tests:
+
+```bash
+python rising.py backtest
+```
+```bash
+python exit_backtest.py
+```
+```bash
+python test_rules.py
+```
+
+## Files
+
+| File | Does |
+|---|---|
+| `app.py` | the Streamlit UI |
+| `rising.py` | daily update, scan, status rules, exit rule |
+| `fundamentals.py` | full financials per stock + the growth checklist |
+| `brief.py` | AI brief from NSE filing PDFs (cached per filing) |
+| `growth_screen.py` | loads data, growth features, first backtest |
+| `exit_backtest.py` | exit-rule backtest |
+| `screener_refresh.py` | latest quarters / capex / industry for scanned names |
+| `data_sync.py` | builds/updates the local market database from public sources |
+| `config.py` | paths and the NSE session |
+| `data/` | your scans, caches, positions and watchlist — local only, never committed |
+
+## License
+
+MIT — see `LICENSE`.
