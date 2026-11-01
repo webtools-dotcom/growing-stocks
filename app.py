@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import duckdb
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 import brief  # filings-grounded LLM brief
@@ -15,6 +16,7 @@ import fundamentals  # full financials + growth checklist
 import rising  # exit rule + alert logic (shared with backtests)
 import settings  # API keys in the OS keychain
 from config import DATA, DB, HERE
+from data_sync import adjust_prices
 
 WATCH, POS = DATA / "watchlist.txt", DATA / "positions.csv"
 DEFAULT_EXCLUDE = ["Oil Gas & Consumable Fuels", "Information Technology", "Energy"]
@@ -107,8 +109,8 @@ def history():
 
 @st.cache_data(ttl=300)
 def prices(symbol):
-    return q("""select d.trade_date, d.close from daily_market d join instruments i using(isin)
-                where i.symbol = ? and d.trade_date >= current_date - 400 order by d.trade_date""", [symbol])
+    return q("""select d.trade_date, d.close, d.volume, d.delivery_pct from daily_market d join instruments i using(isin)
+                where i.symbol = ? and d.trade_date >= current_date - 1100 order by d.trade_date""", [symbol])
 
 
 @st.cache_data(ttl=300)
@@ -220,6 +222,78 @@ def mini(title, fig, col, h=230):
     fig = chart_layout(fig, h)
     fig.update_xaxes(tickangle=0, nticks=5)
     col.plotly_chart(fig, width="stretch", config=PLOT)
+
+
+RANGES = {"1M": 31, "3M": 92, "6M": 183, "1Y": 366, "2Y": 731, "3Y": 1100}
+
+
+def price_chart(sym, r):
+    """Price with a plain-English summary, range buttons, trend line, your buy/stop, and volume. Hover only, no
+    drag-zoom: picking a range re-slices the data so the y-axis always fits what you see."""
+    px_ = prices(sym)
+    if px_.empty:
+        return
+    px_ = px_.assign(trade_date=pd.to_datetime(px_.trade_date), close=adjust_prices(px_.close)).dropna(subset=["close"])
+    px_["dma200"] = px_.close.rolling(200, min_periods=150).mean()  # computed on full history, before slicing
+    h1, h2 = st.columns([3, 2])
+    with h2:
+        rng = st.segmented_control("range", list(RANGES), default="1Y", key=f"rng_{sym}", label_visibility="collapsed") or "1Y"
+    d = px_[px_.trade_date >= px_.trade_date.iloc[-1] - pd.Timedelta(days=RANGES[rng])]
+    last, first = d.close.iloc[-1], d.close.iloc[0]
+    chg = last / first - 1
+    hi52 = px_[px_.trade_date >= px_.trade_date.iloc[-1] - pd.Timedelta(days=365)].close.max()
+    dma = px_.dma200.iloc[-1]
+
+    trend = ("" if pd.isna(dma) else
+             f' · {pct(last / dma - 1)} vs 200-day avg — <span class="{"up" if last > dma else "dn"}">'
+             f'{"uptrend" if last > dma else "downtrend"}</span>')
+    with h1:
+        sec("price", f"₹{last:,.2f} · {pct(chg, 1)} over {rng}{trend} · {pct(last / hi52 - 1)} from 52-week high")
+
+    held = pos[pos.symbol == sym]
+    line_c = C["green"] if chg >= 0 else C["red"]
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[.8, .2], vertical_spacing=.03)
+    fig.add_trace(go.Scatter(x=d.trade_date, y=d.close, name="price", line=dict(color=line_c, width=1.6),
+                             text=[f"{x:+.1%}" for x in d.close / first - 1],
+                             hovertemplate="₹%{y:,.2f}  (%{text} in range)<extra>price</extra>"), 1, 1)
+    if d.dma200.notna().any():
+        fig.add_trace(go.Scatter(x=d.trade_date, y=d.dma200, name="200-day average (trend)",
+                                 line=dict(color=C["dim"], width=1, dash="dot"),
+                                 hovertemplate="₹%{y:,.0f}<extra>200-day avg</extra>"), 1, 1)
+
+    # horizontal reference lines, labelled at the right edge
+    refs = [(hi52, "52-week high", C["dim"], "dot")]
+    if pd.notna(r.get("trigger")):
+        refs.append((r.trigger, "buy trigger", C["blue"], "dash"))
+    if len(held):
+        bp = float(held.buy_price.iloc[0])
+        refs += [(bp, "your buy", C["amber"], "solid"), (bp * (1 - rising.STOP_PCT), "your stop −20%", C["red"], "dash")]
+    for y, label, color, dash in refs:
+        fig.add_hline(y=y, row=1, col=1, line=dict(color=color, width=1, dash=dash), opacity=.8,
+                      annotation_text=f"{label} ₹{y:,.0f}", annotation_position="top left",
+                      annotation_font=dict(color=color, size=10))
+    fig.add_trace(go.Scatter(x=[d.trade_date.iloc[-1]], y=[last], mode="markers+text", text=[f" ₹{last:,.1f}"],
+                             textposition="middle right", textfont=dict(color=line_c, size=11),
+                             marker=dict(color=line_c, size=6), showlegend=False, hoverinfo="skip"), 1, 1)
+
+    fig.add_trace(go.Bar(x=d.trade_date, y=d.volume, name="volume", marker_color="#3b3d34", showlegend=False,
+                         hovertemplate="%{y:,.0f} shares<extra>volume</extra>"), 2, 1)
+
+    # fit the visible prices, plus any reference line within 25% of them (a far-away 52w high shouldn't squash the line)
+    lo, top = d.close.min(), d.close.max()
+    near = [y for y, *_ in refs if lo * .75 <= y <= top * 1.25]
+    lo, top = min([lo] + near), max([top] + near)
+    chart_layout(fig, 400).update_layout(
+        dragmode=False, hovermode="x unified", margin=dict(l=0, r=60, t=24, b=0),
+        hoverlabel=dict(bgcolor="#171813", bordercolor=C["line"], font=dict(family="JetBrains Mono, monospace", size=11)),
+        legend=dict(orientation="h", y=1.07, x=0, font=dict(size=10)))
+    fig.update_xaxes(fixedrange=True, showspikes=True, spikemode="across", spikethickness=1, spikecolor=C["dim"], spikedash="dot")
+    fig.update_yaxes(fixedrange=True, tickprefix="₹", row=1, col=1, range=[lo * .97, top * 1.03])
+    fig.update_yaxes(fixedrange=True, showticklabels=False, showgrid=False, row=2, col=1)
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "scrollZoom": False})
+    show('<div class="note">adjusted for splits &amp; bonuses · hover to read any day · green/red = up/down over the chosen range · '
+         'price above the dotted 200-day average = uptrend'
+         + (' · amber = your buy, red dashed = your stop' if len(held) else '') + '</div>')
 
 
 def growth_story(fd):
@@ -501,7 +575,7 @@ with t_today:
 with t_board:
     f1, f2, f3, f4 = st.columns([2, 3, 1, 1])
     statuses = f1.multiselect("status", STATUSES, ["LEADER", "EMERGING"],
-                              help="wait had no edge in the backtest (median −6%) — a watch list, not a buy list")
+                              help="wait had no edge in the backtest (median −10%) — a watch list, not a buy list")
     inds = sorted(b.industry.dropna().unique())
     f2.multiselect("exclude industries", inds, [i for i in DEFAULT_EXCLUDE if i in inds], key="excl",
                    help="war / oil / IT-sensitive sectors excluded by default")
@@ -546,21 +620,11 @@ with t_stock:
               ("capex", "yes" if str(r.get("capex")) == "True" else "–"), ("trigger", num(r.get("trigger")))]
         show('<div class="kv">' + "".join(f"<div><span>{k}</span>{v_}</div>" for k, v_ in kv) + "</div>")
 
+        price_chart(sym, r)
         if fd:
             growth_story(fd)
         else:
             show('<div class="note">no fundamentals page found for this symbol</div>')
-
-        px_ = prices(sym)
-        if len(px_):
-            px_["dma200"] = px_.close.rolling(200, min_periods=50).mean()
-            fig = go.Figure([go.Scatter(x=px_.trade_date, y=px_.close, name="close", line=dict(color=C["text"], width=1.3)),
-                             go.Scatter(x=px_.trade_date, y=px_.dma200, name="200-day avg", line=dict(color=C["dim"], width=1, dash="dot"))])
-            if pd.notna(r.get("trigger")):
-                fig.add_hline(y=r.trigger, line=dict(color=C["blue"], width=1, dash="dash"),
-                              annotation_text="trigger", annotation_font_color=C["blue"])
-            sec("price", "1 year · above the 200-day average = uptrend")
-            st.plotly_chart(chart_layout(fig, 280), width="stretch", config={"displayModeBar": False})
 
         cached = brief.latest_cached(sym)
         sec("ai brief", "read from the company's own filings · explains, never decides")

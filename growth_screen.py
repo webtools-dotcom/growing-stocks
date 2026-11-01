@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from config import DB
+from data_sync import adjust_prices
 LAG_DAYS = 60      # results assumed public 60d after quarter end (SEBI max: 45d, Q4: 60d)
 HOLD = 126         # ~6 months of trading days
 TOP = 10
@@ -33,11 +34,8 @@ px["trade_date"] = pd.to_datetime(px["trade_date"])
 con.close()  # release the file so the daily sync can write
 close = px.pivot(index="trade_date", columns="isin", values="close").sort_index()
 turn = px.pivot(index="trade_date", columns="isin", values="turnover_cr").sort_index()
-# ponytail: prices are unadjusted; a one-day drop >45% is treated as a split/bonus (return zeroed).
-# Real crashes that big get hidden too — rare, acceptable for a screen.
-dret = close.pct_change(fill_method=None)
-dret = dret.mask(dret < -0.45, 0.0)
-adj = (1 + dret.fillna(0)).cumprod().where(close.notna())
+# NSE prices are unadjusted: fix splits, bonuses and bad prints once, here, for the scan and all backtests
+adj = adjust_prices(close)
 
 
 def features(asof_q: pd.Timestamp, on: pd.Timestamp) -> pd.DataFrame:

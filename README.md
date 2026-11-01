@@ -66,9 +66,9 @@ distributed with this repository.** Respect each source's terms of use; this too
 
 | Label | Rule | Backtest, next 6 months (median) |
 |---|---|---|
-| leader | 2+ strong growth quarters, price near highs and above its 200-day average, already up >80% in a year | +28% |
-| emerging | growth accelerating, margins up, price confirmed, up <80% in a year | beat the rest of the market in every season with 20+ names |
-| wait | growth accelerating but price not confirmed — *trigger* = price to close above | −6% (watch only) |
+| leader | 2+ strong growth quarters, price near highs and above its 200-day average, already up >80% in a year | +25% (83% of picks up) |
+| emerging | growth accelerating, margins up, price confirmed, up <80% in a year | +13% (rest of market: +2%) |
+| wait | growth accelerating but price not confirmed — *trigger* = price to close above | −10% (watch only) |
 | broke | dropped off the board since the last scan | |
 
 Exit rule (tested against trailing stops and moving-average exits, which did worse): sell if price falls 20%

@@ -36,6 +36,25 @@ FIRST_RUN_DAYS = 550   # ~1.5 years: enough for 200-day averages, 1-year returns
 PAUSE = 0.35           # seconds between NSE file downloads — be polite
 
 
+MAX_DAILY_MOVE = .25  # NSE price bands cap normal moves at ~20%; anything bigger is a corporate action or a bad print
+
+
+def adjust_prices(close):
+    """Raw NSE closes (Series, or DataFrame dates x stocks) -> prices adjusted for splits, bonuses and one-day bad
+    prints, in today's price units. NSE files are not adjusted, so a 2-for-1 split looks like a -50% crash.
+    - a >25% move that reverses the next day is a bad print: that day is dropped
+    - any other >25% move is a split/bonus/data break: earlier prices are scaled to match
+    ponytail: rule-based, not NSE's corporate-action list; a genuine >25% day (rare: no-band F&O stocks) gets
+    flattened. Upgrade path: apply exact ratios from /api/corporates-corporateActions."""
+    r = close.pct_change(fill_method=None)
+    spike = (r.abs() > MAX_DAILY_MOVE) & (((1 + r) * (1 + r.shift(-1)) - 1).abs() < .10)
+    clean = close.mask(spike)
+    r = clean.ffill(limit=5).pct_change(fill_method=None)
+    r = r.mask(r.abs() > MAX_DAILY_MOVE, 0.0)
+    growth = (1 + r.fillna(0)).cumprod().where(clean.notna())
+    return growth * (clean.ffill().iloc[-1] / growth.ffill().iloc[-1])
+
+
 def connect():
     con = duckdb.connect(str(DB))
     con.execute(SCHEMA)

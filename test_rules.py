@@ -29,4 +29,12 @@ assert lv(position_alerts(100, "2026-01-01", 130, "2026-08-01", "LEADER")) == ["
 assert lv(position_alerts(100, "2026-01-01", 130, "2026-08-01", "not on board")) == ["EXIT"]      # 6m, dropped off
 q = dict(quarter_end="2026-09-30", sales_yoy=.05, pat_yoy=.40)
 assert lv(position_alerts(100, "2026-10-01", 105, "2026-11-01", "EMERGING", q)) == ["WARN"]       # growth slowed
+
+# price adjustment: 2-for-1 split, one-day bad print, and a normal 10% day must all come out right
+from data_sync import adjust_prices  # noqa: E402
+
+raw = pd.Series([100, 110, 55, 60.5, 30, 60, 66.0])  # split after day 2, bad print on day 5
+a = adjust_prices(raw).round(2).tolist()
+assert a[:4] == [50, 55, 55, 60.5], a                 # pre-split prices halved; the split is not a "crash"
+assert pd.isna(a[4]) and a[5:] == [60, 66], a         # bad print dropped, the rebound is not a +100% "rally"
 print("all rule checks passed")

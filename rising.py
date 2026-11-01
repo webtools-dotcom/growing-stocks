@@ -35,9 +35,9 @@ def classify(f):
     return s
 
 
-# Exit rule chosen by exit_backtest.py (Sep-2025 + Dec-2025 entry seasons, 91 trades):
-# a 20% stop from entry + a review at 6 months kept most of the return (median +16% vs +20% for
-# plain 6m hold) while cutting the worst trade from -46% to -24%. Trailing stops and 50/200-DMA
+# Exit rule chosen by exit_backtest.py (Sep-2025 + Dec-2025 entry seasons, 90 trades, split-adjusted prices):
+# a 20% stop from entry + a review at 6 months kept most of the return (median +16% vs +17% for
+# plain 6m hold) while cutting the worst trade from -45% to -24%. Trailing stops and 50/200-DMA
 # exits did worse. "Growth broke" did not improve results, so it is a warning, not an exit.
 STOP_PCT = .20
 REVIEW_DAYS = 182  # calendar days, ~126 trading days
