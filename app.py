@@ -109,6 +109,7 @@ label p {{ font-size: .74rem !important; color: {C['dim']} !important; }}
 .vm i.on {{ outline: 1px solid {C['text']}; }}
 .vr {{ color: {C['text']}; }} .vr b {{ font-weight: 600; margin-right: .4rem; }}
 .vc .vall {{ border-top: 1px solid {C['line']}; padding-top: .45rem; }}
+.xr {{ display: block; color: {C['dim']}; font-size: .68rem; margin-top: .1rem; cursor: help; }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -843,8 +844,11 @@ with t_stock:
             except Exception:
                 traps_ = None
             vd = insights.free_snapshot(fd, sym, pxs if len(pxs) else None, universe(), ind_, sub_, traps_)
-            sec("company snapshot", "what it does · war & oil exposure · rule-based verdicts from public data — free, no AI · "
-                                    "research ratings, not buy/sell calls")
+            vb = brief.latest_cached(sym)
+            ai = vb[4] if vb and vb[4] else None
+            sec("company snapshot", ("verdicts by the AI brief, grounded in filings + measured public data; rule-based verdicts "
+                                     "beside them as a cross-check" if ai else "rule-based verdicts from public data")
+                + " · research ratings, not buy/sell calls")
             c1, c2 = st.columns([2, 3], gap="large")
             with c1:
                 show(f'<div class="meta">{esc(vd["sector"])}</div>')
@@ -859,10 +863,12 @@ with t_stock:
                     with st.expander("business details (Screener)"):
                         st.markdown(esc(fd["key_points"]))
             with c2:
-                show(viz.verdict_card_html(vd))
-                show('<div class="note">how: business = the growth check · sector = industry peers in our scan · war &amp; oil = '
+                show(viz.verdict_card_html(ai, rules=vd) if ai else viz.verdict_card_html(vd))
+                show('<div class="note">rule-based: business = the growth check · sector = industry peers in our scan · war &amp; oil = '
                      'industry oil map + the company’s own description + how it fell on panic days · before buying = the '
-                     'safety radar · overall = their average. the AI brief below adds a written explanation (optional).</div>')
+                     'safety radar. ' + ("the AI read these plus the filings and news; ≠ marks where it disagrees — hover "
+                     "“rules” for the rule-based reason." if ai else "generate the AI brief below for verdicts that also "
+                     "read the filings and news (one cached call).") + '</div>')
 
         # ---- how it was ranked: the exact rules (rising.RULES / classify) applied to this stock
         U = universe()
@@ -946,7 +952,7 @@ with t_stock:
                 except Exception as e:
                     show(f'<div class="flag">brief failed: {esc(e)}</div>')
         if cached:
-            gen, md, srcs, usage = cached
+            gen, md, srcs, usage, _ = cached
             st.markdown(md)
             link = lambda x, label: f'<a href="{x["url"]}" target="_blank">{label}</a>'
             groups = [("filings", [link(x, f'{x["id"]} {esc(x["type"]).lower()} {x["date"]}') for x in srcs if x["id"][0] == "D"]),

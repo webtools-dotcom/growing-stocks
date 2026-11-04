@@ -6,9 +6,11 @@ A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one qu
 - **Board** — every listed company scanned daily; labelled by backtested rules (leader / emerging / wait), with a
   funnel showing how ~2,700 listed companies narrow to the buy-list and the full rule set
 - **Company snapshot** — what the company does (Screener's description) and five verdict meters on a Best → Critical
-  scale, **computed from public data with no AI**: business (the growth check), sector outlook (its industry peers in
-  our scan), war & oil risk (industry oil map + the company's own description + how far it fell on the market's
-  worst days since 2023), before-buying checks (the safety radar) and overall. Research ratings, not buy/sell calls
+  scale: business, sector outlook, war & oil risk (with an oil-link rating), before-buying checks and overall.
+  Rule-based verdicts from public data are always there for free (growth check, industry peers in our scan, industry
+  oil map + the company's own description + how far it fell on the market's worst days since 2023, safety radar).
+  With the AI brief, the AI gives its own verdicts — grounded in the filings, news *and* those measured facts — and
+  the rule-based verdict sits beside each one as a cross-check (≠ where they disagree). Research ratings, not buy/sell calls
 - **How it was ranked** — on every stock: the four gates as connected cards with bullet bars (value vs threshold),
   what would change the label (price that breaks the trend, price that makes it a leader, sales needed next quarter),
   a waterfall of the ranking score, where the stock sits among all scanned stocks on each metric, and its label

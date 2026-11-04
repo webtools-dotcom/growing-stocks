@@ -339,8 +339,9 @@ def label_timeline(hist, h=150):
 VERDICT_C = {"Best": "#7fc46a", "Good": C["green"], "Average": C["amber"], "Bad": "#d98c4b", "Worse": C["red"], "Critical": "#e0473a"}
 
 
-def verdict_card_html(v):
-    """Each verdict as a 6-step meter (Best -> Critical) with the reason beside it."""
+def verdict_card_html(v, rules=None):
+    """Each verdict as a 6-step meter (Best -> Critical) with its reason. `rules` (the free rule-based verdicts) is
+    shown beside each AI verdict as a cross-check; ≠ marks where they disagree."""
     scale = list(VERDICT_C)
     rows = [("business", "business"), ("sector outlook", "sector_outlook"), ("war & oil risk", "war_risk"),
             ("before buying", "checks"), ("overall", "overall")]
@@ -352,11 +353,16 @@ def verdict_card_html(v):
         idx = scale.index(verdict)
         meter = "".join(f'<i class="{"on" if i == idx else ""}" style="background:{VERDICT_C[s] if i <= idx else "#1f201a"}'
                         f'{";opacity:.35" if i < idx else ""}"></i>' for i, s in enumerate(scale))
+        cross = ""
+        if rules and key in rules:
+            rv = rules[key][0]
+            diff = abs(scale.index(rv) - idx) >= 1
+            cross = (f'<span class="xr" title="rule-based: {rules[key][1]}">{"≠ " if diff else ""}rules: '
+                     f'<b style="color:{VERDICT_C[rv]}">{rv.lower()}</b></span>')
         cls = ' class="vall"' if key == "overall" else ""
         out.append(f'<div{cls}><span class="vl">{label}</span></div><div{cls}><div class="vm">{meter}</div></div>'
-                   f'<div{cls}><span class="vr"><b style="color:{VERDICT_C[verdict]}">{verdict}</b>{reason}</span></div>')
-    legend = '<div class="note" style="margin-top:.5rem">scale: best · good · average · bad · worse · critical — ' \
-             'for war &amp; oil risk, best = almost no exposure, critical = very likely to fall sharply on escalation</div>'
+                   f'<div{cls}><span class="vr"><b style="color:{VERDICT_C[verdict]}">{verdict}</b>{reason}</span>{cross}</div>')
+    legend = '<div class="note" style="margin-top:.5rem">scale: best · good · average · bad · worse · critical — '              'for war &amp; oil risk, best = almost no exposure, critical = very likely to fall sharply on escalation</div>'
     return f'<div class="vc">{"".join(out)}</div>{legend}'
 
 
