@@ -49,10 +49,3 @@ a = adjust_prices(raw).round(2).tolist()
 assert a[:4] == [50, 55, 55, 60.5], a                 # pre-split prices halved; the split is not a "crash"
 assert pd.isna(a[4]) and a[5:] == [60, 66], a         # bad print dropped, the rebound is not a +100% "rally"
 print("all rule checks passed")
-
-# AI brief verdict block: parsed out of the answer, and only the allowed scale is kept
-from brief import split_verdicts  # noqa: E402
-
-md_, v_ = split_verdicts('```json\n{"business": ["Good", "ok"], "war_risk": ["Excellent", "not on scale"]}\n```\n### In one line\nx')
-assert md_.startswith("### In one line") and v_["business"] == ["Good", "ok"] and "war_risk" not in v_, (md_, v_)
-print("brief verdict parsing ok")

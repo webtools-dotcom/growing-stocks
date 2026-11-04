@@ -258,3 +258,108 @@ def trap_scores(f, symbol, px=None):
         out.append(("easy to trade", max(5, score - locked * 8),
                     f"median ₹{turn:,.1f} Cr traded/day" + (f", {locked} circuit-locked days" if locked else "")))
     return out
+
+
+# ------------------------------------------------------------------ company snapshot verdicts — rule-based, free, no AI
+VERDICTS = ["Best", "Good", "Average", "Bad", "Worse", "Critical"]
+
+# industries whose costs or demand move with crude oil (raw material, fuel or freight), and war beneficiaries
+OIL_HIGH = r"oil|petro|refin|gas|chemical|paint|plastic|polymer|tyre|tire|rubber|aviation|airline|shipping|logistic|" \
+           r"fertili|lubricant|packaging|synthetic|textile|pvc|asphalt|bitumen|dye|pigment|agrochem|pesticide|carbon black"
+OIL_MED = r"cement|steel|iron|metal|alumin|power|auto|fmcg|consumer|ceramic|glass|paper|transport|construction|pharma|drug"
+OIL_WORDS = r"crude|naphtha|petroleum|polymer|resin|pvc|lng|natural gas|freight|bitumen|furnace oil|diesel"
+WAR_PLUS = r"defen[cs]e|aerospace|ammunition|missile|drone|shipbuild|security"
+EXPORT_WORDS = r"export|overseas|international|global markets?|europe|usa|united states|middle east|gulf|russia|ukraine"
+
+
+def _verdict(score):
+    """0..100 (100 = best) -> verdict on the Best..Critical scale."""
+    return VERDICTS[0 if score >= 85 else 1 if score >= 70 else 2 if score >= 55 else 3 if score >= 40 else 4 if score >= 25 else 5]
+
+
+def panic_sensitivity(px, n_days=12):
+    """How the stock moved on the market's worst days since 2023 (election day, small-cap crash, tariff crash…).
+    -> dict(ratio = stock fall / market fall, stock_avg, market_avg, days) or None."""
+    p = DATA / "market_days.csv"
+    if px is None or px.empty or not p.exists():
+        return None
+    m = pd.read_csv(p, index_col=0, parse_dates=True).market
+    r = px.set_index("trade_date").close.pct_change()
+    both = pd.concat([m, r.rename("stock")], axis=1).dropna()
+    if len(both) < 120:
+        return None
+    worst = both.nsmallest(n_days, "market")
+    return dict(ratio=worst.stock.mean() / worst.market.mean(), stock_avg=worst.stock.mean(), market_avg=worst.market.mean(),
+                days=len(worst), worst_day=worst.stock.min())
+
+
+def free_snapshot(f, symbol, px, universe, industry, sub_industry, traps):
+    """Verdicts for the company snapshot from public data + our own scan. Same keys the card expects:
+    business / sector_outlook / war_risk / checks / overall -> [verdict, reason], plus oil_link, sector, sources."""
+    import fundamentals
+    text = " ".join(filter(None, [f.get("about", ""), f.get("key_points", "")])).lower()
+    ind = " ".join(filter(None, [industry or "", sub_industry or ""])).lower()
+    out = dict(sector=" / ".join(filter(None, [industry, sub_industry])) or "unclassified")
+
+    # business: the 10-point growth check
+    checks = fundamentals.checklist(f)
+    rated = [v for v, *_ in checks if v != "n/a"]
+    if rated:
+        score = (sum(v == "pass" for v in rated) + .5 * sum(v == "watch" for v in rated)) / len(rated) * 100
+        fails = [t.lower() for v, t, _ in checks if v == "fail"]
+        out["business"] = [_verdict(score), f"{sum(v == 'pass' for v in rated)} of {len(rated)} growth checks pass"
+                           + (f"; weak: {', '.join(fails[:2])}" if fails else "")]
+
+    # sector outlook: how the company's industry peers are doing in our own scan
+    if industry and universe is not None and len(universe):
+        im = universe.assign(industry=universe.symbol.map(industries_map()))
+        peers = im[im.industry == industry]
+        if len(peers) >= 5:
+            g = peers.sales_yoy.median()
+            m3 = peers.ret3m.median()
+            rising = peers.status.isin(["LEADER", "EMERGING"]).mean()
+            score = 50 + min(25, max(-25, g * 100)) + min(15, max(-15, m3 * 60)) + min(10, rising * 50)
+            out["sector_outlook"] = [_verdict(score), f"{len(peers)} peers: median sales {g:+.0%}, 3-month price {m3:+.0%}, "
+                                     f"{rising:.0%} on the buy-list"]
+
+    # war & oil risk: industry sensitivity + the company's own words + measured panic behaviour
+    oil = "high" if re.search(OIL_HIGH, ind) else "medium" if re.search(OIL_MED, ind) else "low"
+    hits = sorted(set(re.findall(OIL_WORDS, text)))
+    if hits and oil == "low":
+        oil = "medium"
+    exports = bool(re.search(EXPORT_WORDS, text))
+    defence = bool(re.search(WAR_PLUS, ind + " " + text))
+    panic = panic_sensitivity(px)
+    score = {"low": 85, "medium": 65, "high": 40}[oil] - (10 if exports else 0) + (10 if defence else 0)
+    why = [f"oil link {oil}" + (f" ({', '.join(hits[:3])} in its business)" if hits else " (by industry)")]
+    if exports:
+        why.append("export / global exposure")
+    if defence:
+        why.append("defence-linked: conflicts can raise demand")
+    if panic:
+        score -= max(0, (panic["ratio"] - 1)) * 25
+        why.append(f"fell {panic['ratio']:.1f}× the market on its {panic['days']} worst days")
+    out["war_risk"] = [_verdict(max(0, min(100, score))), "; ".join(why)]
+    out["oil_link"], out["panic"] = oil, panic
+
+    # before buying: the safety radar
+    if traps:
+        s = [v for _, v, _ in traps]
+        weak = [a for a, v, _ in traps if v < 40]
+        out["checks"] = [_verdict(.6 * sum(s) / len(s) + .4 * min(s)), f"safety radar avg {sum(s) / len(s):.0f}/100"
+                         + (f"; weak: {', '.join(weak)}" if weak else "; no weak spots")]
+
+    # overall: average of the four, the worst one named
+    parts = [k for k in ("business", "sector_outlook", "war_risk", "checks") if k in out]
+    if parts:
+        idx = [VERDICTS.index(out[k][0]) for k in parts]
+        worst = max(parts, key=lambda k: VERDICTS.index(out[k][0]))
+        out["overall"] = [VERDICTS[round(sum(idx) / len(idx))],
+                          f"average of {len(parts)} verdicts; weakest: {worst.replace('_', ' ')} ({out[worst][0].lower()})"]
+    return out
+
+
+def industries_map():
+    import rising
+    m = rising.industries()
+    return m.industry.to_dict() if "industry" in m else {}

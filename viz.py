@@ -376,3 +376,16 @@ def sandbox_compare(base, mine, h=300):
     fig = chart_layout(fig, h).update_layout(barmode="group", bargap=.3, hovermode="closest")
     fig.update_yaxes(ticksuffix="%", zeroline=True, zerolinecolor=C["dim"])
     return fig
+
+
+def panic_bars(p, h=150):
+    """Average move on the market's worst days: the market vs this stock."""
+    fig = go.Figure(go.Bar(
+        y=["market", "this stock"], x=[p["market_avg"] * 100, p["stock_avg"] * 100], orientation="h",
+        marker_color=[C["muted"], C["red"] if p["ratio"] > 1.2 else C["amber"] if p["ratio"] > .9 else C["green"]],
+        text=[f"{p['market_avg']:+.1%}", f"{p['stock_avg']:+.1%} ({p['ratio']:.1f}×)"], textposition="outside",
+        hovertemplate="%{y}: %{x:.1f}% average<extra>on the " + str(p["days"]) + " worst market days</extra>"))
+    fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=60, t=4, b=0))
+    fig.update_xaxes(ticksuffix="%", range=[min(p["market_avg"], p["stock_avg"]) * 100 * 1.5, 0])
+    fig.update_yaxes(tickfont=dict(color=C["text"]))
+    return fig

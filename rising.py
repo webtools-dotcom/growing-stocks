@@ -226,6 +226,10 @@ def scan():
     keep = ["symbol", "status", "close", "dma200", "high52", "streak", "sales_yoy", "pat_yoy", "seq_ups", "sales_yoy_2",
             "opm_chg", "above_200", "off_high", "ret1y", "ret3m", "lumpy", "qtr"]
     f[keep].to_csv(DATA / "universe.csv", index=False)
+    # the market's day-by-day move (median of liquid stocks) — used to measure how a stock behaves on panic days
+    liquid = g.turn.rolling(60, min_periods=20).median() >= 1
+    mret = g.adj.pct_change(fill_method=None).where(liquid).median(axis=1)
+    mret.rename("market").dropna().to_frame().to_csv(DATA / "market_days.csv")
     R = RULES
     gp = (f.streak >= R["streak"]) & (f.sales_yoy > R["sales_yoy"]) & (f.pat_yoy > R["pat_yoy"]) & (f.seq_ups >= R["seq_ups"])
     ap = gp & ((f.sales_yoy > f.sales_yoy_2) | (f.opm_chg > 0))

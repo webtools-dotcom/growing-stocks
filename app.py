@@ -136,6 +136,11 @@ def base_backtest():
     return rising.backtest_rules(load_seasons())
 
 
+@st.cache_data(ttl=3600)
+def industry_table():
+    return rising.industries()
+
+
 @st.cache_data(ttl=300)
 def universe():
     p = DATA / "universe.csv"
@@ -825,29 +830,39 @@ with t_stock:
               ("capex", "yes" if str(r.get("capex")) == "True" else "–"), ("trigger", num(r.get("trigger")))]
         show('<div class="kv">' + "".join(f"<div><span>{k}</span>{v_}</div>" for k, v_ in kv) + "</div>")
 
-        # ---- company snapshot: what it does (Screener, free) + AI verdicts (from the cached brief, no extra call)
-        vb = brief.latest_cached(sym)
-        vd = vb[4] if vb else {}
-        if fd and (fd.get("about") or vd):
-            sec("company snapshot", "what it does · war & oil exposure · verdicts from the AI brief (research ratings, not buy/sell calls)")
+        # ---- company snapshot: what it does + verdicts, all from public data and our own scan (no AI, no tokens)
+        if fd:
+            pxs = prices(sym)
+            if len(pxs):
+                pxs = pxs.assign(trade_date=pd.to_datetime(pxs.trade_date), close=adjust_prices(pxs.close)).dropna(subset=["close"])
+            imap = industry_table()
+            ind_ = r.get("industry") if pd.notna(r.get("industry")) else imap.industry.get(sym)
+            sub_ = r.get("sub_industry") if pd.notna(r.get("sub_industry")) else (imap.sub_industry.get(sym) if "sub_industry" in imap else None)
+            try:
+                traps_ = insights.trap_scores(fd, sym, pxs if len(pxs) else None)
+            except Exception:
+                traps_ = None
+            vd = insights.free_snapshot(fd, sym, pxs if len(pxs) else None, universe(), ind_, sub_, traps_)
+            sec("company snapshot", "what it does · war & oil exposure · rule-based verdicts from public data — free, no AI · "
+                                    "research ratings, not buy/sell calls")
             c1, c2 = st.columns([2, 3], gap="large")
             with c1:
-                if vd.get("sector"):
-                    show(f'<div class="meta">{esc(vd["sector"])}</div>')
-                show(f'<p style="margin:.2rem 0 .5rem">{esc(vd.get("what_it_does") or fd.get("about", ""))}</p>')
-                if vd.get("oil_link"):
-                    ol = vd["oil_link"].lower()
-                    show(f'<div class="nxi {"down" if ol == "high" else "watch" if ol == "medium" else "up"}" style="display:inline-block">'
-                         f'oil-price link: <b>{esc(ol)}</b><span>how much crude prices move its costs or demand</span></div>')
+                show(f'<div class="meta">{esc(vd["sector"])}</div>')
+                show(f'<p style="margin:.2rem 0 .5rem">{esc(fd.get("about") or "no description on Screener")}</p>')
+                ol = vd["oil_link"]
+                show(f'<div class="nxi {"down" if ol == "high" else "watch" if ol == "medium" else "up"}" style="display:inline-block">'
+                     f'oil-price link: <b>{ol}</b><span>how much crude prices move its costs or demand</span></div>')
+                if vd.get("panic"):
+                    show('<div class="meta" style="margin-top:.7rem">on the market’s worst days since 2023</div>')
+                    st.plotly_chart(viz.panic_bars(vd["panic"]), width="stretch", config=PLOT)
                 if fd.get("key_points"):
                     with st.expander("business details (Screener)"):
                         st.markdown(esc(fd["key_points"]))
             with c2:
-                if vd:
-                    show(viz.verdict_card_html(vd))
-                else:
-                    show('<div class="note">verdicts on the business, sector, war/oil risk and red flags come with the AI brief — '
-                         'press <b>generate brief</b> in the AI brief section below (one call, cached).</div>')
+                show(viz.verdict_card_html(vd))
+                show('<div class="note">how: business = the growth check · sector = industry peers in our scan · war &amp; oil = '
+                     'industry oil map + the company’s own description + how it fell on panic days · before buying = the '
+                     'safety radar · overall = their average. the AI brief below adds a written explanation (optional).</div>')
 
         # ---- how it was ranked: the exact rules (rising.RULES / classify) applied to this stock
         U = universe()
@@ -931,7 +946,7 @@ with t_stock:
                 except Exception as e:
                     show(f'<div class="flag">brief failed: {esc(e)}</div>')
         if cached:
-            gen, md, srcs, usage, _ = cached
+            gen, md, srcs, usage = cached
             st.markdown(md)
             link = lambda x, label: f'<a href="{x["url"]}" target="_blank">{label}</a>'
             groups = [("filings", [link(x, f'{x["id"]} {esc(x["type"]).lower()} {x["date"]}') for x in srcs if x["id"][0] == "D"]),
