@@ -22,6 +22,17 @@ f = pd.DataFrame([
 got = classify(f).fillna("-").tolist()
 assert got == ["EMERGING", "LEADER", "WAIT", "-", "-", "-", "-"], got
 
+# the "how it was ranked" panel must always agree with the real label
+from rising import explain  # noqa: E402
+
+for i, r in f.assign(close=100.0, dma200=90.0, high52=105.0).iterrows():
+    e = explain(r)
+    assert (e["label"] or "-") == got[i], (i, e["label"], got[i])
+    if e["label"] == "EMERGING":
+        assert any("LEADER" in why for _, _, why in e["next"]), e["next"]   # shows the price that makes it a leader
+    if e["label"] is None:
+        assert e["next"] and "stopped at" in e["next"][0][1], e["next"]   # says which gate it failed
+
 lv = lambda a: [x[0] for x in a]
 assert lv(position_alerts(100, "2026-10-01", 95, "2026-11-01", "EMERGING")) == []
 assert lv(position_alerts(100, "2026-10-01", 79, "2026-11-01", "EMERGING")) == ["EXIT"]           # 20% stop

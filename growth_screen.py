@@ -76,8 +76,8 @@ def features(asof_q: pd.Timestamp, on: pd.Timestamp) -> pd.DataFrame:
 
 
 def growth_score(f):
-    r = lambda s: s.clip(-1, 5).rank(pct=True)
-    return r(f.sales_yoy) + r(f.pat_yoy) + 0.5 * r(f.opm_chg)
+    r = lambda s: s.clip(-1, 5).rank(pct=True)  # growth ratios: cap freak +500%+ quarters
+    return r(f.sales_yoy) + r(f.pat_yoy) + 0.5 * f.opm_chg.rank(pct=True)  # margin change is in points: no cap
 
 
 STRATS = {

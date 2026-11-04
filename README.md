@@ -3,7 +3,12 @@
 A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one question every day:
 **which companies are really growing, and is the market starting to notice?**
 
-- **Board** — every listed company scanned daily; labelled by backtested rules (leader / emerging / wait)
+- **Board** — every listed company scanned daily; labelled by backtested rules (leader / emerging / wait), with a
+  funnel showing how ~2,700 listed companies narrow to the buy-list and the full rule set
+- **How it was ranked** — on every stock: the four gates as connected cards with bullet bars (value vs threshold),
+  what would change the label (price that breaks the trend, price that makes it a leader, sales needed next quarter),
+  a waterfall of the ranking score, where the stock sits among all scanned stocks on each metric, and its label
+  history. The panel runs the exact same rules (`rising.RULES`) as the scan — a test keeps them in sync
 - **Growth story** for any stock — a 10-point plain-English growth check (sales every quarter, operating
   leverage, margins, cash vs profit, ROCE, debt, capacity build-up, promoter holding, receivables) plus
   interactive charts: revenue & profit with year-on-year growth on every bar, margins, cash vs profit,

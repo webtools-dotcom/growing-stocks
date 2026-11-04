@@ -11,6 +11,7 @@ Usage:
   python rising.py scan     # scan only, from cached data
 """
 import io
+import json
 import os
 import sys
 from datetime import date, timedelta
@@ -23,16 +24,81 @@ from config import DATA, DB, nse_session
 BOARD, HISTORY = DATA / "rising_latest.csv", DATA / "rising_history.csv"
 
 
+# Every threshold the labels use. classify(), the backtests and the app's "how it was ranked" panel all read
+# these, so the explanation shown to users can never drift from what actually decides a label.
+RULES = dict(
+    streak=2,         # strong quarters (sales AND profit up >15% YoY, see growth_screen.features) out of the last 3
+    sales_yoy=.20,    # latest quarter sales growth vs a year ago
+    pat_yoy=.25,      # latest quarter profit growth vs a year ago
+    seq_ups=2,        # quarters (of last 3) where sales rose vs the previous quarter
+    near_high=.85,    # trend: price at least 85% of its 52-week high (within 15%)
+    wait_floor=.60,   # WAIT only if price is still at least 60% of its high
+    run_up=.80,       # 1-year rise that splits LEADER (already ran) from EMERGING (not yet)
+)
+
+
 def classify(f):
     """Status rules — shared by the daily scan and `python rising.py backtest`."""
-    growth = (f.streak >= 2) & (f.sales_yoy > .20) & (f.pat_yoy > .25) & (f.seq_ups >= 2)
+    R = RULES
+    growth = (f.streak >= R["streak"]) & (f.sales_yoy > R["sales_yoy"]) & (f.pat_yoy > R["pat_yoy"]) & (f.seq_ups >= R["seq_ups"])
     accel = (f.sales_yoy > f.sales_yoy_2) | (f.opm_chg > 0)
-    trend = f.above_200 & (f.off_high > .85)
+    trend = f.above_200 & (f.off_high > R["near_high"])
     s = pd.Series(None, index=f.index, dtype=object)
-    s[growth & trend & (f.ret1y >= .8)] = "LEADER"
-    s[growth & accel & trend & (f.ret1y < .8)] = "EMERGING"
-    s[growth & accel & ~trend & (f.off_high > .6) & (f.ret1y < .8) & s.isna()] = "WAIT"
+    s[growth & trend & (f.ret1y >= R["run_up"])] = "LEADER"
+    s[growth & accel & trend & (f.ret1y < R["run_up"])] = "EMERGING"
+    s[growth & accel & ~trend & (f.off_high > R["wait_floor"]) & (f.ret1y < R["run_up"]) & s.isna()] = "WAIT"
     return s
+
+
+def explain(row, sales_base=None, profit_base=None):
+    """Why a stock got its label: every gate and test with its value vs threshold, and what would change it.
+    row: one stock's features (as saved in data/universe.csv). sales_base/profit_base: the year-ago quarter
+    that NEXT quarter will be compared against (Rs crore), for the "next results" condition."""
+    R, g = RULES, lambda k: row.get(k) if hasattr(row, "get") else row[k]
+    label = classify(pd.DataFrame([dict(row)])).iloc[0]
+    label = label if isinstance(label, str) else None
+    t = lambda name, value, need, ok, fmt, hint="": dict(name=name, value=value, need=need, passed=bool(ok), fmt=fmt, hint=hint)
+    close, dma, high, ret1y = g("close"), g("dma200"), g("high52"), g("ret1y")
+    vs_dma = close / dma - 1 if dma else None
+    growth = [t("strong quarters (of last 3)", g("streak"), R["streak"], g("streak") >= R["streak"], "n",
+                "sales AND profit up >15% vs a year ago"),
+              t("sales growth, latest quarter", g("sales_yoy"), R["sales_yoy"], g("sales_yoy") > R["sales_yoy"], "pct"),
+              t("profit growth, latest quarter", g("pat_yoy"), R["pat_yoy"], g("pat_yoy") > R["pat_yoy"], "pct"),
+              t("quarters sales rose vs previous (of 3)", g("seq_ups"), R["seq_ups"], g("seq_ups") >= R["seq_ups"], "n")]
+    accel = [t("sales growth now vs 2 quarters ago", g("sales_yoy"), g("sales_yoy_2"), g("sales_yoy") > g("sales_yoy_2"), "pct",
+               "growth is speeding up"),
+             t("operating margin vs a year ago (pts)", g("opm_chg"), 0, g("opm_chg") > 0, "pts", "or: margins are widening")]
+    trend = [t("price vs 200-day average", vs_dma, 0, bool(g("above_200")), "pct", "long-term uptrend"),
+             t("distance from 52-week high", g("off_high") - 1, R["near_high"] - 1, g("off_high") > R["near_high"], "pct",
+               "near its highs, not broken")]
+    gates = [dict(name="growth", rule="all must pass", tests=growth, passed=all(x["passed"] for x in growth)),
+             dict(name="acceleration", rule="either passes" + (" · not needed for leaders" if label == "LEADER" else ""),
+                  tests=accel, passed=any(x["passed"] for x in accel)),
+             dict(name="trend", rule="both must pass", tests=trend, passed=all(x["passed"] for x in trend)),
+             dict(name="run-up", rule="splits leader / emerging",
+                  tests=[t("1-year price rise", ret1y, R["run_up"], ret1y >= R["run_up"], "pct",
+                           "above = LEADER (already ran) · below = EMERGING (not yet)")], passed=None)]
+
+    nxt = []
+    line = max(dma or 0, R["near_high"] * (high or 0)) or None  # the price that passes the trend gate
+    if label in ("LEADER", "EMERGING") and line:
+        nxt.append(("down", f"falls below ₹{line:,.1f} ({line / close - 1:+.1%})",
+                    "trend gate fails → " + ("drops off the board" if label == "LEADER" else "becomes WAIT")))
+    if label == "EMERGING" and pd.notna(ret1y):
+        lead = close * (1 + R["run_up"]) / (1 + ret1y)
+        nxt.append(("up", f"rises to ₹{lead:,.1f} ({lead / close - 1:+.1%})", "1-year run passes 80% → becomes LEADER"))
+    if label == "WAIT" and line:
+        nxt.append(("up", f"closes above ₹{line:,.1f} ({line / close - 1:+.1%})", "trend gate passes → becomes EMERGING"))
+    if label and sales_base:
+        nxt.append(("watch", f"next results: sales above ₹{sales_base * (1 + R['sales_yoy']):,.0f} Cr"
+                    + (f", profit above ₹{profit_base * (1 + R['pat_yoy']):,.0f} Cr" if profit_base and profit_base > 0 else ""),
+                    f"needed to keep +{R['sales_yoy']:.0%} sales / +{R['pat_yoy']:.0%} profit growth vs a year ago"))
+    if not label:
+        stop = next((gt for gt in gates[:3] if gt["passed"] is False), None)
+        if stop:
+            miss = [x for x in stop["tests"] if not x["passed"]]
+            nxt.append(("down", f"stopped at the {stop['name']} gate", "fails: " + ", ".join(x["name"] for x in miss)))
+    return dict(label=label, gates=gates, next=nxt)
 
 
 # Exit rule chosen by exit_backtest.py (Sep-2025 + Dec-2025 entry seasons, 90 trades, split-adjusted prices):
@@ -110,6 +176,16 @@ def scan():
         parts.append(f[f.index.isin(ids.index)].assign(qtr=q.date()))
     f = pd.concat(parts).join(g.inst.set_index("isin")[["symbol", "company_name", "market_cap_cr"]])
 
+    # entry conditions exactly as the scan saw them (growth_screen.features applies these filters), so the app can
+    # show why a company was or wasn't scanned using the same numbers
+    lq = g.qr.sort_values("quarter_end").groupby("isin").tail(1).set_index("isin")
+    i_ = len(g.close) - 1
+    turn60 = g.turn.iloc[max(0, i_ - 60): i_ + 1].median()
+    (pd.DataFrame({"qtr": lq.quarter_end.dt.date, "sales": lq.sales_cr, "pat": lq.net_profit_cr,
+                   "turn_cr": turn60.reindex(lq.index)})
+     .join(g.inst.set_index("isin").symbol).assign(scanned=lambda d: d.index.isin(f.index))
+     .to_csv(DATA / "entry.csv", index=False))
+
     i = len(g.adj) - 1
     hist = g.adj.iloc[max(0, i - 250): i + 1]
     f["dma200"] = (g.close.iloc[i] * hist.tail(200).mean() / g.adj.iloc[i]).reindex(f.index)  # in today's price units
@@ -125,7 +201,23 @@ def scan():
     f["trigger"] = pd.concat([f.dma200, .85 * f.high52], axis=1).max(axis=1).where(f.status == "WAIT")
 
     b = f[f.status.notna()].copy()
-    b["score"] = g.growth_score(b) + b.ret3m.rank(pct=True) * .5 - b.lumpy * 1.0
+    # score = the same parts as growth_screen.growth_score, kept separately so the app can show the breakdown
+    rk = lambda s: s.clip(-1, 5).rank(pct=True)
+    b["s_sales"], b["s_profit"], b["s_margin"] = rk(b.sales_yoy), rk(b.pat_yoy), .5 * b.opm_chg.rank(pct=True)
+    b["s_mom"], b["s_lumpy"] = .5 * b.ret3m.rank(pct=True), -1.0 * b.lumpy
+    b["score"] = b[["s_sales", "s_profit", "s_margin", "s_mom", "s_lumpy"]].sum(axis=1)
+
+    # everything the "how it was ranked" panels need: every scanned stock (for the crowd strips) + funnel counts
+    keep = ["symbol", "status", "close", "dma200", "high52", "streak", "sales_yoy", "pat_yoy", "seq_ups", "sales_yoy_2",
+            "opm_chg", "above_200", "off_high", "ret1y", "ret3m", "lumpy", "qtr"]
+    f[keep].to_csv(DATA / "universe.csv", index=False)
+    R = RULES
+    gp = (f.streak >= R["streak"]) & (f.sales_yoy > R["sales_yoy"]) & (f.pat_yoy > R["pat_yoy"]) & (f.seq_ups >= R["seq_ups"])
+    ap = gp & ((f.sales_yoy > f.sales_yoy_2) | (f.opm_chg > 0))
+    (DATA / "funnel.json").write_text(json.dumps(dict(
+        listed=int(len(g.inst)), recent=int(sum(len(ids) for q, ids in latest.groupby(latest) if q >= on - pd.Timedelta(days=200))),
+        scanned=int(len(f)), growth=int(gp.sum()), accel=int(ap.sum()),
+        labels={k: int(v) for k, v in f.status.value_counts().items()}, asof=str(on.date()))), encoding="utf-8")
     b = b.join(industries(), on="symbol")
     meta = pd.read_csv(DATA / "screener_meta.csv") if (DATA / "screener_meta.csv").exists() else pd.DataFrame(columns=["symbol"])
     b = b.join(meta.set_index("symbol")[[c for c in ("pe", "roce", "capex") if c in meta]], on="symbol")

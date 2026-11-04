@@ -78,6 +78,30 @@ label p {{ font-size: .74rem !important; color: {C['dim']} !important; }}
 .kv {{ display: flex; flex-wrap: wrap; gap: .4rem 2.4rem; margin: .4rem 0 1rem; font-size: .9rem; }}
 .kv > div {{ white-space: nowrap; }}
 .kv > div > span:first-child {{ display: block; color: {C['dim']}; font-size: .7rem; }}
+/* how-it-was-ranked: gate path */
+.gates {{ display: flex; align-items: stretch; gap: .45rem; flex-wrap: wrap; margin: .5rem 0 .9rem; }}
+.gate {{ flex: 1 1 230px; border: 1px solid {C['line']}; padding: .65rem .75rem .5rem; background: #12130e; }}
+.gate.pass {{ border-top: 2px solid {C['green']}; }} .gate.fail {{ border-top: 2px solid {C['red']}; opacity: .95; }}
+.gate.info {{ border-top: 2px solid {C['blue']}; }}
+.gh {{ display: flex; justify-content: space-between; font-weight: 600; text-transform: uppercase; letter-spacing: .14em; font-size: .72rem; }}
+.gnum {{ color: {C['dim']}; margin-right: .55rem; font-weight: 400; }}
+.gm.pass {{ color: {C['green']}; }} .gm.fail {{ color: {C['red']}; }} .gm.info {{ color: {C['blue']}; }}
+.gr {{ color: {C['dim']}; font-size: .66rem; margin: .15rem 0 .55rem; }}
+.gt {{ margin: .45rem 0; }}
+.gn {{ font-size: .7rem; color: {C['text']}; cursor: help; }}
+.gb {{ position: relative; height: 6px; background: #1f201a; margin: .28rem 0 .2rem; }}
+.gf {{ height: 100%; transition: width .6s ease; }} .gf.pass {{ background: {C['green']}; }} .gf.fail {{ background: {C['red']}; }}
+.gf.info {{ background: {C['blue']}; }}
+.gk {{ position: absolute; top: -4px; width: 2px; height: 14px; background: {C['text']}; }}
+.gv {{ font-size: .7rem; color: {C['dim']}; }} .gv b {{ font-weight: 600; }}
+.gv b.pass {{ color: {C['green']}; }} .gv b.fail {{ color: {C['red']}; }} .gv b.info {{ color: {C['blue']}; }}
+.garrow {{ align-self: center; color: {C['dim']}; font-size: 1.1rem; }}
+.gres {{ align-self: center; border: 1px solid; padding: .9rem 1.1rem; font-weight: 600; letter-spacing: .16em; font-size: .85rem; }}
+.nx {{ display: flex; gap: .5rem; flex-wrap: wrap; margin: 0 0 .4rem; }}
+.nxi {{ border: 1px solid {C['line']}; padding: .4rem .7rem; font-size: .76rem; background: #12130e; }}
+.nxi span {{ display: block; color: {C['dim']}; font-size: .68rem; margin-top: .1rem; }}
+.nxi.up {{ border-left: 2px solid {C['green']}; }} .nxi.down {{ border-left: 2px solid {C['red']}; }}
+.nxi.watch {{ border-left: 2px solid {C['amber']}; }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -93,6 +117,12 @@ def q(sql, params=None):
     except duckdb.IOException:
         st.markdown('<div class="flag warn">database busy (daily sync running) — try again in a minute</div>', unsafe_allow_html=True)
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def universe():
+    p = DATA / "universe.csv"
+    return pd.read_csv(p) if p.exists() else pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
@@ -701,6 +731,29 @@ with t_today:
 
 # ---------------------------------------------------------------- board
 with t_board:
+    fn_p = DATA / "funnel.json"
+    if fn_p.exists():
+        fn = json.loads(fn_p.read_text(encoding="utf-8"))
+        R = rising.RULES
+        with st.expander(f"how {fn['listed']:,} listed companies become this list — the full method", expanded=False):
+            c1, c2 = st.columns([3, 2], gap="large")
+            c1.plotly_chart(viz.universe_funnel(fn), width="stretch", config=PLOT)
+            with c2:
+                show(table([
+                    dict(g="1 growth", _wrap=f"{R['streak']}+ of last 3 quarters with sales and profit up &gt;15% · latest sales "
+                                         f"&gt;{R['sales_yoy']:.0%} and profit &gt;{R['pat_yoy']:.0%} vs a year ago · sales up "
+                                         f"quarter-on-quarter in {R['seq_ups']}+ of last 3"),
+                    dict(g="2 acceleration", _wrap="sales growth faster than 2 quarters ago, or operating margin up vs a year ago"),
+                    dict(g="3 trend", _wrap=f"price above its 200-day average and within {1 - R['near_high']:.0%} of its 52-week high"),
+                    dict(g="4 run-up", _wrap=f"up &gt;{R['run_up']:.0%} in a year → <span style='color:{C['amber']}'>leader</span>, "
+                                       f"otherwise <span class='up'>emerging</span> · fails trend but still above "
+                                       f"{R['wait_floor']:.0%} of its high → <span style='color:{C['blue']}'>wait</span>"),
+                    dict(g="order", _wrap="within a label: rank of sales growth + profit growth + ½ margin change + ½ 3-month momentum "
+                                      "− 1 for one-off quarters")],
+                    [("g", "gate"), ("_wrap", "rule")]))
+                show('<div class="note">prices adjusted for splits and bad prints · results are public ~45–60 days after the quarter · '
+                     'thresholds were chosen by judgment and checked on a 2-year backtest (see <b>scoreboard</b>) — '
+                     'transparent, not magic. open any stock to see every test applied to it.</div>')
     f1, f2, f3, f4 = st.columns([2, 3, 1, 1])
     statuses = f1.multiselect("status", STATUSES, ["LEADER", "EMERGING"],
                               help="wait had no edge in the backtest (median −10%) — a watch list, not a buy list")
@@ -754,6 +807,71 @@ with t_stock:
               ("p/e · roce", f"{num(r.get('pe'), 0)} · {num(r.get('roce'), 0)}%"), ("1y", pct(r.get("ret1y"))),
               ("capex", "yes" if str(r.get("capex")) == "True" else "–"), ("trigger", num(r.get("trigger")))]
         show('<div class="kv">' + "".join(f"<div><span>{k}</span>{v_}</div>" for k, v_ in kv) + "</div>")
+
+        # ---- how it was ranked: the exact rules (rising.RULES / classify) applied to this stock
+        U = universe()
+        urow = U[U.symbol == sym] if len(U) else U
+        if len(urow):
+            ur = urow.iloc[0].to_dict()
+            sb = pb = None
+            qq = fd["tables"].get("quarters") if fd else None
+            if qq is not None and "Sales" in qq.index and qq.shape[1] >= 4:  # next quarter is compared with this one
+                sb = qq.loc["Sales"].iloc[-4]
+                pb = qq.loc["Net Profit"].iloc[-4] if "Net Profit" in qq.index else None
+            e = rising.explain(ur, sb, pb)
+            sec("how it was ranked", "the same rules and thresholds that build the board · hover a test name for what it means")
+            show(viz.gate_path_html(e))
+            if e["next"]:
+                show('<div class="meta" style="margin-bottom:.3rem">what would change it</div><div class="nx">' + "".join(
+                    f'<div class="nxi {k}">{"▲" if k == "up" else "▼" if k == "down" else "◎"} {esc(a)}<span>{esc(w)}</span></div>'
+                    for k, a, w in e["next"]) + "</div>")
+            c1, c2 = st.columns([2, 3], gap="large")
+            with c1:
+                on_board = sym in bs.index and pd.notna(bs.loc[sym].get("s_sales"))
+                if on_board:
+                    lab = b[b.status == r.status].reset_index(drop=True)
+                    rank = int(lab.index[lab.symbol == sym][0]) + 1
+                    show(f'<div class="meta">score breakdown · #{rank} of {len(lab)} {r.status.lower()} · decides the order on the board</div>')
+                    st.plotly_chart(viz.score_waterfall(bs.loc[sym], rank, len(lab)), width="stretch", config=PLOT)
+                    show('<div class="note">each part is a rank from 0 to 1 among all board stocks (1 = best). '
+                         'the label comes from the gates; the score only orders stocks within a label.</div>')
+                hh = history()
+                hh = hh[hh.symbol == sym] if len(hh) else hh
+                if len(hh):
+                    show('<div class="meta">label history</div>')
+                    st.plotly_chart(viz.label_timeline(hh), width="stretch", config=PLOT)
+                bt_p = DATA / "backtest.json"
+                if e["label"] in ("LEADER", "EMERGING", "WAIT") and bt_p.exists():
+                    bt_ = pd.DataFrame(json.loads(bt_p.read_text(encoding="utf-8")))
+                    mine, rest = bt_[bt_.status == e["label"]], bt_[bt_.status == "everything else"]
+                    if len(mine):
+                        show(f'<div class="note">track record of this label in the backtest: median '
+                             f'{pct(mine["median"].median())} over 6 months, {mine.hit.mean():.0%} of picks up '
+                             f'(every other stock: {pct(rest["median"].median())}) · {len(mine)} seasons, small sample</div>')
+            with c2:
+                show(f'<div class="meta">where it stands among all {len(U):,} scanned stocks · dotted line = the threshold the rule uses</div>')
+                st.plotly_chart(viz.crowd_strips(U, ur), width="stretch", config=PLOT)
+        else:
+            sec("how it was ranked", "not scanned — it fails an entry condition before the gates")
+            # the exact numbers the scan used (data/entry.csv, written by rising.scan)
+            ent_p = DATA / "entry.csv"
+            ent = pd.read_csv(ent_p) if ent_p.exists() else pd.DataFrame(columns=["symbol"])
+            er = ent[ent.symbol == sym]
+            er = er.iloc[0] if len(er) else {}
+            last_q, sales_q, np_q, turn = (er.get(k) if len(er) else None for k in ("qtr", "sales", "pat", "turn_cr"))
+            has_q = last_q is not None and pd.notna(last_q)
+            fresh = has_q and pd.Timestamp(last_q) >= pd.Timestamp.now() - pd.Timedelta(days=200)
+            conds = [("results in the last 6 months", fresh, f"latest: {pd.Timestamp(last_q):%b %Y}" if has_q else "none"),
+                     ("profitable last quarter", np_q is not None and np_q > 0, f"net profit ₹{np_q:,.0f} Cr" if np_q is not None else "–"),
+                     ("₹25 Cr+ quarterly sales", sales_q is not None and sales_q >= 25,
+                      f"₹{sales_q:,.0f} Cr" if sales_q is not None else "–"),
+                     ("₹1 Cr+ traded a day (60-day median)", turn is not None and turn >= 1, f"₹{turn:,.1f} Cr" if turn is not None else "–")]
+            show(table([dict(m=f'<span class="{"up" if ok else "dn"}">{"✓" if ok else "✗"}</span>', c=c, v=esc(v)) for c, ok, v in conds],
+                       [("m", ""), ("c", "entry condition"), ("v", "this stock")]))
+            show('<div class="note">these are the numbers the scan itself used (database + Screener cache). the scan skips tiny, '
+                 'loss-making, stale or illiquid companies — their numbers are too noisy to rank fairly. if a figure here '
+                 'differs from the charts below, the data sources disagree (common for finance companies); '
+                 'the next update re-fetches it.</div>')
 
         price_chart(sym, r)
         if fd:

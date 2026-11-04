@@ -186,3 +186,151 @@ def compare_lines(series, h=300, suffix=""):
     fig = chart_layout(fig, h)
     fig.update_xaxes(tickangle=0, nticks=8)
     return fig
+
+
+# ------------------------------------------------------------------ "how it was ranked" panels
+def _bar_pos(t):
+    """Scale for one gate test's bullet bar -> (fill %, threshold %). Threshold sits mid-bar where it can."""
+    v, need, fmt = t["value"], t["need"], t["fmt"]
+    if v is None or pd.isna(v):
+        return 0, 50
+    if t["name"].startswith("sales growth now"):  # compared against a moving bar (growth 2 quarters ago)
+        need = need if need is not None and pd.notna(need) else 0
+        lo, hi = min(0, v, need), max(v, need, 1e-9) * 1.15
+    elif fmt == "n":
+        lo, hi = 0, 3
+    elif need > 0:
+        lo, hi = 0, 2 * need
+    elif need < 0:
+        lo, hi = 2 * need, 0
+    else:
+        span = max(abs(v), .3 if fmt == "pct" else 5)
+        lo, hi = -span, span
+    pos = lambda x: max(0, min(100, (x - lo) / (hi - lo) * 100)) if hi > lo else 50
+    return pos(v), pos(need if need is not None and pd.notna(need) else 0)
+
+
+def fmt_val(x, fmt):
+    if x is None or pd.isna(x):
+        return "–"
+    return f"{x:+.0%}" if fmt == "pct" else f"{x:+.1f} pts" if fmt == "pts" else f"{x:.0f}"
+
+
+def gate_path_html(e):
+    """The decision path as connected gate cards: each test is a bullet bar (value fill, threshold tick)."""
+    cards = []
+    for n, g in enumerate(e["gates"], 1):
+        state = "info" if g["passed"] is None else "pass" if g["passed"] else "fail"
+        mark = {"pass": "✓", "fail": "✗", "info": "↔"}[state]
+        rows = []
+        for t in g["tests"]:
+            fill, tick = _bar_pos(t)
+            if g["passed"] is None:  # the run-up gate splits, it doesn't pass/fail
+                need = f"leader above {fmt_val(t['need'], t['fmt'])}"
+            elif t["need"] is None or pd.isna(t["need"]):
+                need = ""
+            elif t["fmt"] == "n":
+                need = f"needs ≥{t['need']:.0f}"
+            else:
+                need = f"needs &gt;{fmt_val(t['need'], t['fmt'])}"
+            ok = "info" if g["passed"] is None else "pass" if t["passed"] else "fail"
+            rows.append(f'<div class="gt"><div class="gn" title="{t["hint"]}">{t["name"]}</div>'
+                        f'<div class="gb"><div class="gf {ok}" style="width:{fill:.0f}%"></div>'
+                        f'<div class="gk" style="left:{tick:.0f}%"></div></div>'
+                        f'<div class="gv"><b class="{ok}">{fmt_val(t["value"], t["fmt"])}</b> <span>{need}</span></div></div>')
+        cards.append(f'<div class="gate {state}"><div class="gh"><span class="gnum">{n}</span>{g["name"]}'
+                     f'<span class="gm {state}">{mark}</span></div><div class="gr">{g["rule"]}</div>{"".join(rows)}</div>')
+    label = e["label"] or "NOT ON BOARD"
+    col = STATUS_C.get(e["label"], C["dim"])
+    arrow = '<div class="garrow">→</div>'
+    return (f'<div class="gates">{arrow.join(cards)}{arrow}'
+            f'<div class="gres" style="border-color:{col};color:{col}">{label}</div></div>')
+
+
+def score_waterfall(row, rank, n_label, h=270):
+    """How the score that orders the board is built: each part is a rank (0..1) among board stocks."""
+    parts = [("sales growth", row["s_sales"], "rank of latest-quarter sales growth among board stocks"),
+             ("profit growth", row["s_profit"], "rank of latest-quarter profit growth among board stocks"),
+             ("margin change", row["s_margin"], "half of the rank of margin change vs a year ago"),
+             ("3-month momentum", row["s_mom"], "half of the rank of the 3-month price move"),
+             ("one-off penalty", row["s_lumpy"], "minus 1 if one quarter's sales were over 2x another's")]
+    fig = go.Figure(go.Waterfall(
+        orientation="h", y=[p[0] for p in parts] + ["score"], x=[p[1] for p in parts] + [0],
+        measure=["relative"] * len(parts) + ["total"],
+        text=[f"{p[1]:+.2f}" for p in parts] + [f"{row['score']:.2f}"], textposition="outside",
+        customdata=[p[2] for p in parts] + [f"#{rank} of {n_label} in its label · best possible 3.0"],
+        hovertemplate="%{y}: %{x:.2f}<br>%{customdata}<extra></extra>",
+        increasing=dict(marker=dict(color=C["green"])), decreasing=dict(marker=dict(color=C["red"])),
+        totals=dict(marker=dict(color=C["amber"])), connector=dict(line=dict(color=C["line"], dash="dot"))))
+    fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=40, t=10, b=0))
+    fig.update_yaxes(autorange="reversed", tickfont=dict(color=C["text"]))
+    fig.update_xaxes(range=[-1.2 if row["s_lumpy"] < 0 else 0, 3.2], showgrid=True, gridcolor="#1d1e19")
+    return fig
+
+
+CROWD = [("sales growth", "sales_yoy", "pct", .20, (-.5, 2)), ("profit growth", "pat_yoy", "pct", .25, (-1, 3)),
+         ("margin change", "opm_chg", "pts", 0, (-15, 15)), ("price vs 200-day avg", "vs_dma", "pct", 0, (-.5, .8)),
+         ("from 52-week high", "from_high", "pct", -.15, (-.7, 0)), ("1-year run", "ret1y", "pct", .80, (-.6, 3))]
+
+
+def crowd_strips(u, me, h=520):
+    """Every scanned stock as a faint dot per metric; this stock bright; dotted line = the rule's threshold."""
+    import numpy as np
+    from plotly.subplots import make_subplots
+    u = u.assign(vs_dma=u.close / u.dma200 - 1, from_high=u.off_high - 1)
+    me = dict(me)
+    me["vs_dma"] = me["close"] / me["dma200"] - 1 if me.get("dma200") else None
+    me["from_high"] = me["off_high"] - 1 if me.get("off_high") is not None else None
+    fig = make_subplots(rows=len(CROWD), cols=1, vertical_spacing=.085, subplot_titles=[c[0] for c in CROWD])
+    rng = np.random.default_rng(7)
+    for i, (title, col, fmt, need, (lo, hi)) in enumerate(CROWD, 1):
+        vals = u[col].dropna()
+        fig.add_trace(go.Scatter(x=vals.clip(lo, hi), y=rng.uniform(-1, 1, len(vals)), mode="markers", hoverinfo="skip",
+                                 showlegend=False, marker=dict(size=3, color=C["dim"], opacity=.3)), i, 1)
+        v = me.get(col)
+        if v is not None and pd.notna(v):
+            beats = (vals < v).mean()
+            fig.add_trace(go.Scatter(x=[min(max(v, lo), hi)], y=[0], mode="markers+text", showlegend=False,
+                                     marker=dict(size=12, color=C["amber"], line=dict(color=C["bg"], width=1.5)),
+                                     text=[f"  {fmt_val(v, fmt)} · beats {beats:.0%}"],
+                                     textposition="middle left" if v > lo + .75 * (hi - lo) else "middle right",
+                                     textfont=dict(color=C["text"], size=10), hoverinfo="skip"), i, 1)
+        fig.add_vline(x=need, row=i, col=1, line=dict(color=C["blue"], width=1, dash="dot"))
+        fig.update_xaxes(range=[lo, hi], tickformat=".0%" if fmt == "pct" else None, ticksuffix="" if fmt == "pct" else " pts",
+                         row=i, col=1, showgrid=False, tickfont=dict(size=9), fixedrange=True)
+        fig.update_yaxes(visible=False, range=[-1.6, 1.6], row=i, col=1, fixedrange=True)
+    fig.update_annotations(font=dict(size=10, color=C["text"]), x=0, xanchor="left", yshift=2)
+    fig.update_layout(height=h, margin=dict(l=0, r=0, t=22, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(family=FONT, size=10, color=C["dim"]), dragmode=False)
+    return fig
+
+
+def universe_funnel(fn, h=340):
+    lab = fn["labels"]
+    stages = [("listed on NSE", fn["listed"]), ("results in the last 6 months", fn["recent"]),
+              ("profitable · Rs 25 Cr+ quarterly sales · Rs 1 Cr+ traded a day", fn["scanned"]),
+              ("growth gate: strong, consistent growth", fn["growth"]), ("+ growth accelerating", fn["accel"]),
+              ("labelled: leader / emerging / wait", sum(lab.values())),
+              ("buy-list: trend confirmed (leader + emerging)", lab.get("LEADER", 0) + lab.get("EMERGING", 0))]
+    fig = go.Figure(go.Funnel(
+        y=[s for s, _ in stages], x=[n for _, n in stages], textinfo="value+percent initial",
+        marker=dict(color=[C["muted"]] * 3 + [C["blue"], C["blue"], C["amber"], C["green"]]),
+        connector=dict(line=dict(color=C["line"], width=1)), textfont=dict(color=C["text"], family=FONT),
+        hovertemplate="%{y}<br>%{x:,} stocks · %{percentInitial:.1%} of all listed<extra></extra>"))
+    fig.update_layout(height=h, margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(family=FONT, size=11, color=C["dim"]), dragmode=False)
+    fig.update_yaxes(tickfont=dict(color=C["text"], size=10))
+    return fig
+
+
+def label_timeline(hist, h=150):
+    """When this stock carried which label, at what price."""
+    order = {"WAIT": 1, "EMERGING": 2, "LEADER": 3, "BROKE": 0}
+    hist = hist.assign(asof=pd.to_datetime(hist["asof"]), y=hist.status.map(order))
+    fig = go.Figure(go.Scatter(x=hist["asof"], y=hist.y, mode="lines+markers", line=dict(color=C["line"], width=1, shape="hv"),
+                               marker=dict(size=10, color=[STATUS_C.get(s, C["dim"]) for s in hist.status]),
+                               customdata=list(zip(hist.status.str.lower(), hist.close)),
+                               hovertemplate="%{x|%d %b %Y}: %{customdata[0]} at Rs %{customdata[1]:,.1f}<extra></extra>"))
+    fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=0, t=6, b=0))
+    fig.update_yaxes(tickvals=[0, 1, 2, 3], ticktext=["broke", "wait", "emerging", "leader"], range=[-.5, 3.5])
+    return fig
