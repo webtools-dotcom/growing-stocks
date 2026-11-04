@@ -102,6 +102,13 @@ label p {{ font-size: .74rem !important; color: {C['dim']} !important; }}
 .nxi span {{ display: block; color: {C['dim']}; font-size: .68rem; margin-top: .1rem; }}
 .nxi.up {{ border-left: 2px solid {C['green']}; }} .nxi.down {{ border-left: 2px solid {C['red']}; }}
 .nxi.watch {{ border-left: 2px solid {C['amber']}; }}
+/* company snapshot: verdict meters */
+.vc {{ display: grid; grid-template-columns: 9.5rem 7.5rem 1fr; gap: .45rem .9rem; align-items: center; font-size: .78rem; }}
+.vc .vl {{ color: {C['dim']}; font-size: .72rem; text-transform: lowercase; }}
+.vm {{ display: flex; gap: 2px; }} .vm i {{ flex: 1; height: 7px; background: #1f201a; }}
+.vm i.on {{ outline: 1px solid {C['text']}; }}
+.vr {{ color: {C['text']}; }} .vr b {{ font-weight: 600; margin-right: .4rem; }}
+.vc .vall {{ border-top: 1px solid {C['line']}; padding-top: .45rem; }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -117,6 +124,16 @@ def q(sql, params=None):
     except duckdb.IOException:
         st.markdown('<div class="flag warn">database busy (daily sync running) — try again in a minute</div>', unsafe_allow_html=True)
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def load_seasons():
+    return rising.season_data()
+
+
+@st.cache_data(ttl=3600)
+def base_backtest():
+    return rising.backtest_rules(load_seasons())
 
 
 @st.cache_data(ttl=300)
@@ -808,6 +825,30 @@ with t_stock:
               ("capex", "yes" if str(r.get("capex")) == "True" else "–"), ("trigger", num(r.get("trigger")))]
         show('<div class="kv">' + "".join(f"<div><span>{k}</span>{v_}</div>" for k, v_ in kv) + "</div>")
 
+        # ---- company snapshot: what it does (Screener, free) + AI verdicts (from the cached brief, no extra call)
+        vb = brief.latest_cached(sym)
+        vd = vb[4] if vb else {}
+        if fd and (fd.get("about") or vd):
+            sec("company snapshot", "what it does · war & oil exposure · verdicts from the AI brief (research ratings, not buy/sell calls)")
+            c1, c2 = st.columns([2, 3], gap="large")
+            with c1:
+                if vd.get("sector"):
+                    show(f'<div class="meta">{esc(vd["sector"])}</div>')
+                show(f'<p style="margin:.2rem 0 .5rem">{esc(vd.get("what_it_does") or fd.get("about", ""))}</p>')
+                if vd.get("oil_link"):
+                    ol = vd["oil_link"].lower()
+                    show(f'<div class="nxi {"down" if ol == "high" else "watch" if ol == "medium" else "up"}" style="display:inline-block">'
+                         f'oil-price link: <b>{esc(ol)}</b><span>how much crude prices move its costs or demand</span></div>')
+                if fd.get("key_points"):
+                    with st.expander("business details (Screener)"):
+                        st.markdown(esc(fd["key_points"]))
+            with c2:
+                if vd:
+                    show(viz.verdict_card_html(vd))
+                else:
+                    show('<div class="note">verdicts on the business, sector, war/oil risk and red flags come with the AI brief — '
+                         'press <b>generate brief</b> in the AI brief section below (one call, cached).</div>')
+
         # ---- how it was ranked: the exact rules (rising.RULES / classify) applied to this stock
         U = universe()
         urow = U[U.symbol == sym] if len(U) else U
@@ -890,7 +931,7 @@ with t_stock:
                 except Exception as e:
                     show(f'<div class="flag">brief failed: {esc(e)}</div>')
         if cached:
-            gen, md, srcs, usage = cached
+            gen, md, srcs, usage, _ = cached
             st.markdown(md)
             link = lambda x, label: f'<a href="{x["url"]}" target="_blank">{label}</a>'
             groups = [("filings", [link(x, f'{x["id"]} {esc(x["type"]).lower()} {x["date"]}') for x in srcs if x["id"][0] == "D"]),
@@ -1014,6 +1055,52 @@ with t_hist:
         st.plotly_chart(viz.scoreboard(rows), width="stretch", config=PLOT)
         show('<div class="note">tall amber/green bars above the grey "everything else" bar = the labels picked better than the market. '
              'small sample (2 years, mostly rising) — the live record below is the real test.</div>')
+
+    # ---- rules sandbox: change any threshold, see today's board and the backtest re-run instantly
+    if rising.SEASONS_FILE.exists():
+        sec("rules sandbox", "move a threshold → today's board and the backtest re-run with your rules · nothing is saved")
+        R = rising.RULES
+        k = "sbx_"
+        if st.button("reset to current rules"):
+            for key in [x for x in st.session_state if x.startswith(k)]:
+                del st.session_state[key]
+        a1, a2, a3, a4, a5, a6 = st.columns(6)
+        mine = dict(
+            sales_yoy=a1.slider("sales growth >", 0, 80, int(R["sales_yoy"] * 100), 5, format="%d%%", key=k + "s") / 100,
+            pat_yoy=a2.slider("profit growth >", 0, 100, int(R["pat_yoy"] * 100), 5, format="%d%%", key=k + "p") / 100,
+            streak=a3.slider("strong quarters of 3 ≥", 1, 3, R["streak"], key=k + "q"),
+            seq_ups=a4.slider("sales up QoQ of 3 ≥", 0, 3, R["seq_ups"], key=k + "u"),
+            near_high=1 - a5.slider("within x% of 52w high", 5, 40, int(round((1 - R["near_high"]) * 100)), 5,
+                                    format="%d%%", key=k + "h") / 100,
+            run_up=a6.slider("leader if 1y run >", 30, 200, int(R["run_up"] * 100), 10, format="%d%%", key=k + "r") / 100)
+        changed = {kk: vv for kk, vv in mine.items() if abs(vv - R[kk]) > 1e-9}
+        U = universe()
+        if len(U):
+            now_lab = rising.classify(U).fillna("–")
+            new_lab = rising.classify(U, mine).fillna("–")
+            cnt = lambda s: " · ".join(f'{status(x)} <b>{int((s == x).sum())}</b>' for x in ("LEADER", "EMERGING", "WAIT"))
+            joined = U.symbol[new_lab.isin(["LEADER", "EMERGING"]) & ~now_lab.isin(["LEADER", "EMERGING"])]
+            left_ = U.symbol[now_lab.isin(["LEADER", "EMERGING"]) & ~new_lab.isin(["LEADER", "EMERGING"])]
+            show(f'<div class="meta">today · current rules: {cnt(now_lab)} &nbsp;→&nbsp; your rules: {cnt(new_lab)}</div>'
+                 + (f'<div class="note"><span class="up">+ joins the buy-list:</span> {esc(", ".join(joined[:25]))}'
+                    f'{" …" if len(joined) > 25 else ""}<br><span class="dn">− leaves it:</span> {esc(", ".join(left_[:25]))}'
+                    f'{" …" if len(left_) > 25 else ""}</div>' if changed else ""))
+        seasons = load_seasons()
+        base_bt = base_backtest()
+        mine_bt = rising.backtest_rules(seasons, mine) if changed else base_bt
+        c1, c2 = st.columns([3, 2], gap="large")
+        c1.plotly_chart(viz.sandbox_compare(base_bt, mine_bt), width="stretch", config=PLOT)
+        with c2:
+            agg = mine_bt.groupby("status").agg(n=("n", "mean"), med=("median", "mean"), hit=("hit", "mean"), p10=("p10", "mean"))
+            show(table([dict(l=status(l) if l in STATUS_C else '<span class="dim">everything else</span>',
+                             n=f"{r.n:.0f}", m=pct(r.med), h=f"{r.hit:.0%}", w=pct(r.p10))
+                        for l, r in agg.reindex(["LEADER", "EMERGING", "WAIT", "everything else"]).dropna().iterrows()],
+                       [("l", "your rules"), ("n", "stocks/season"), ("m", "median 6m"), ("h", "% up"), ("w", "worst 10%")],
+                       numeric={"n", "m", "h", "w"}))
+            small = agg.loc[[x for x in ("LEADER", "EMERGING") if x in agg.index], "n"].min() if len(agg) else 0
+            show(f'<div class="note">{"<span class=dn>⚠ fewer than 15 stocks a season: these numbers are mostly luck.</span> " if small < 15 else ""}'
+                 'beware over-fitting: with only a few past seasons, tight rules always look great in hindsight. '
+                 'prefer rules that keep 20+ stocks a season and still beat "everything else".</div>')
     h = history()
     sec("live track record", "how each name did after it first appeared on the board")
     if len(h):

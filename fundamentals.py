@@ -53,7 +53,9 @@ def fetch(sym):
         data = {k: table(soup, v) for k, v in SECTIONS.items()}
         data["shareholding"] = _shareholding(soup)
         name = soup.select_one("h1")
+        clean = lambda el: re.sub(r"\s*\[\d+\]", "", el.get_text(" ", strip=True)) if el else ""
         return dict(symbol=sym, name=name.get_text(strip=True) if name else sym, basis=path.rstrip("/") or "standalone",
+                    about=clean(soup.select_one(".about"))[:600], key_points=clean(soup.select_one(".commentary"))[:1500],
                     fetched=date.today().isoformat(), growth=_ranges(soup),
                     tables={k: v.to_json(orient="split") for k, v in data.items() if v is not None})
     return None
@@ -64,7 +66,8 @@ def get(sym, max_age_days=7, refresh=False):
     CACHE.mkdir(parents=True, exist_ok=True)
     p = CACHE / f"{sym.upper()}.json"
     d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
-    if refresh or d is None or (date.today() - date.fromisoformat(d["fetched"])).days > max_age_days:
+    stale = d is None or "about" not in d or (date.today() - date.fromisoformat(d["fetched"])).days > max_age_days
+    if refresh or stale:
         fresh = fetch(sym.upper())
         if fresh:
             p.write_text(json.dumps(fresh), encoding="utf-8")

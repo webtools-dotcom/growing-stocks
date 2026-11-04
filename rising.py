@@ -37,9 +37,9 @@ RULES = dict(
 )
 
 
-def classify(f):
-    """Status rules — shared by the daily scan and `python rising.py backtest`."""
-    R = RULES
+def classify(f, rules=None):
+    """Status rules — shared by the daily scan, the backtests and the app's rules sandbox (custom `rules`)."""
+    R = RULES if rules is None else {**RULES, **rules}
     growth = (f.streak >= R["streak"]) & (f.sales_yoy > R["sales_yoy"]) & (f.pat_yoy > R["pat_yoy"]) & (f.seq_ups >= R["seq_ups"])
     accel = (f.sales_yoy > f.sales_yoy_2) | (f.opm_chg > 0)
     trend = f.above_200 & (f.off_high > R["near_high"])
@@ -136,30 +136,45 @@ def results_calendar():
     return len(cal)
 
 
-def backtest():
-    """Forward 6m returns of each status bucket at every past results season (no look-ahead)."""
+SEASONS_FILE = DATA / "seasons.pkl"
+SEASON_COLS = ["streak", "sales_yoy", "pat_yoy", "seq_ups", "sales_yoy_2", "opm_chg", "above_200", "off_high", "ret1y"]
+
+
+def season_data(refresh=False):
+    """Every past results season's features + each stock's next-6-month return, computed once and cached.
+    The rules sandbox re-classifies this in milliseconds, so any threshold can be backtested instantly."""
+    if SEASONS_FILE.exists() and not refresh:
+        return pd.read_pickle(SEASONS_FILE)
     import growth_screen as g
-    rows = []
+    parts = []
     for q in pd.date_range("2024-12-31", "2026-06-30", freq="QE"):
         on = q + pd.Timedelta(days=g.LAG_DAYS)
         f = g.features(q, on)
-        f["status"] = classify(f)
-        for st in ["LEADER", "EMERGING", "WAIT", None]:
-            sel = f[f.status.isna()] if st is None else f[f.status == st]
-            if sel.empty:
-                continue
-            r, held = g.fwd(sel)
-            rows.append(dict(on=on.date(), status=st or "everything else", n=len(sel), held=held,
-                             median=r.median(), hit=(r > 0).mean(), p10=r.quantile(.1)))
-    d = pd.DataFrame(rows)
-    # saved for the app's scoreboard chart (only seasons with a full 6 months of data afterwards)
-    (DATA / "backtest.json").write_text(d[d.held >= g.HOLD - 5].assign(on=d.on.astype(str)).to_json(orient="records"),
-                                        encoding="utf-8")
+        r, held = g.fwd(f)
+        parts.append(f[SEASON_COLS].assign(fwd=r, held=held, on=on.date()))
+    d = pd.concat(parts)
+    d.to_pickle(SEASONS_FILE)
+    return d
+
+
+def backtest_rules(d, rules=None):
+    """Median 6-month return per label per season under `rules` -> DataFrame (complete 6-month windows only)."""
+    import growth_screen as g
+    d = d[d.held >= g.HOLD - 5].assign(status=lambda x: classify(x, rules).fillna("everything else"))
+    out = d.groupby(["on", "status"]).fwd.agg(n="size", median="median", hit=lambda s: (s > 0).mean(),
+                                              p10=lambda s: s.quantile(.1)).reset_index()
+    return out
+
+
+def backtest():
+    """Forward 6m returns of each status bucket at every past results season (no look-ahead)."""
+    d = backtest_rules(season_data(refresh=True))
+    # saved for the app's scoreboard chart
+    (DATA / "backtest.json").write_text(d.assign(on=d.on.astype(str)).to_json(orient="records"), encoding="utf-8")
     pd.set_option("display.width", 200)
     print(d.assign(**{c: d[c].map("{:+.0%}".format) for c in ["median", "hit", "p10"]}).to_string(index=False))
-    full = d[d.held >= g.HOLD - 5]
     print("\nCompleted 6m windows, averaged across seasons:")
-    print(full.groupby("status")[["n", "median", "hit", "p10"]].mean()
+    print(d.groupby("status")[["n", "median", "hit", "p10"]].mean()
           .assign(n=lambda x: x.n.round(0)).to_string(float_format="{:+.1%}".format))
 
 

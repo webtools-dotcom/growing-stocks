@@ -334,3 +334,45 @@ def label_timeline(hist, h=150):
     fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=0, t=6, b=0))
     fig.update_yaxes(tickvals=[0, 1, 2, 3], ticktext=["broke", "wait", "emerging", "leader"], range=[-.5, 3.5])
     return fig
+
+
+VERDICT_C = {"Best": "#7fc46a", "Good": C["green"], "Average": C["amber"], "Bad": "#d98c4b", "Worse": C["red"], "Critical": "#e0473a"}
+
+
+def verdict_card_html(v):
+    """Each verdict as a 6-step meter (Best -> Critical) with the reason beside it."""
+    scale = list(VERDICT_C)
+    rows = [("business", "business"), ("sector outlook", "sector_outlook"), ("war & oil risk", "war_risk"),
+            ("before buying", "checks"), ("overall", "overall")]
+    out = []
+    for label, key in rows:
+        if key not in v:
+            continue
+        verdict, reason = v[key]
+        idx = scale.index(verdict)
+        meter = "".join(f'<i class="{"on" if i == idx else ""}" style="background:{VERDICT_C[s] if i <= idx else "#1f201a"}'
+                        f'{";opacity:.35" if i < idx else ""}"></i>' for i, s in enumerate(scale))
+        cls = ' class="vall"' if key == "overall" else ""
+        out.append(f'<div{cls}><span class="vl">{label}</span></div><div{cls}><div class="vm">{meter}</div></div>'
+                   f'<div{cls}><span class="vr"><b style="color:{VERDICT_C[verdict]}">{verdict}</b>{reason}</span></div>')
+    legend = '<div class="note" style="margin-top:.5rem">scale: best · good · average · bad · worse · critical — ' \
+             'for war &amp; oil risk, best = almost no exposure, critical = very likely to fall sharply on escalation</div>'
+    return f'<div class="vc">{"".join(out)}</div>{legend}'
+
+
+def sandbox_compare(base, mine, h=300):
+    """Median 6-month return per label: current rules vs your rules (averaged over seasons), with sample sizes."""
+    labels = ["LEADER", "EMERGING", "WAIT", "everything else"]
+    agg = lambda d: d.groupby("status").agg(median=("median", "mean"), n=("n", "mean")).reindex(labels)
+    a, b = agg(base), agg(mine)
+    fig = go.Figure([
+        go.Bar(x=[l.lower() for l in labels], y=a["median"] * 100, name="current rules", marker_color=C["muted"],
+               text=[f"n≈{n:.0f}" if pd.notna(n) else "" for n in a.n], textposition="outside", textfont=dict(size=9),
+               hovertemplate="%{x}: median %{y:+.1f}%<extra>current rules</extra>"),
+        go.Bar(x=[l.lower() for l in labels], y=b["median"] * 100, name="your rules",
+               marker_color=[STATUS_C.get(l, C["dim"]) for l in labels],
+               text=[f"n≈{n:.0f}" if pd.notna(n) else "" for n in b.n], textposition="outside", textfont=dict(size=9),
+               hovertemplate="%{x}: median %{y:+.1f}%<extra>your rules</extra>")])
+    fig = chart_layout(fig, h).update_layout(barmode="group", bargap=.3, hovermode="closest")
+    fig.update_yaxes(ticksuffix="%", zeroline=True, zerolinecolor=C["dim"])
+    return fig

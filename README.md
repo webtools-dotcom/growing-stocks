@@ -5,6 +5,9 @@ A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one qu
 
 - **Board** — every listed company scanned daily; labelled by backtested rules (leader / emerging / wait), with a
   funnel showing how ~2,700 listed companies narrow to the buy-list and the full rule set
+- **Company snapshot** — what the company does (Screener's description, free) plus verdict meters from the AI brief:
+  business, sector outlook, war & oil-price risk (with an oil-link rating), things to check, overall — research
+  ratings on a Best → Critical scale, not buy/sell calls
 - **How it was ranked** — on every stock: the four gates as connected cards with bullet bars (value vs threshold),
   what would change the label (price that breaks the trend, price that makes it a leader, sales needed next quarter),
   a waterfall of the ranking score, where the stock sits among all scanned stocks on each metric, and its label
@@ -24,6 +27,8 @@ A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one qu
 - **Themes** — treemap of industries by how many rising companies they hold, coloured by momentum
 - **Compare** — 2–3 stocks on one growth/quality radar plus a sales "growth race"
 - **Scoreboard** — how each label did in the backtest vs every other stock, and the live track record
+- **Rules sandbox** — sliders for every threshold; today's board and the backtest re-run instantly with your
+  rules (names that join/leave, median return per label, sample-size and over-fitting warnings)
 - **Thesis tracker** — write why you bought; each quarter it shows whether that reason still holds
 - **Desktop notifications** — stop hit, trigger crossed, red flag, results tomorrow (Windows)
 - **Today** — your positions with a backtested exit rule, what changed since yesterday, results coming up
