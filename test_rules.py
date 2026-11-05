@@ -56,3 +56,17 @@ from brief import split_verdicts  # noqa: E402
 md_, v_ = split_verdicts('```json\n{"business": ["Good", "ok"], "war_risk": ["Excellent", "not on scale"]}\n```\n### In one line\nx')
 assert md_.startswith("### In one line") and v_["business"] == ["Good", "ok"] and "war_risk" not in v_, (md_, v_)
 print("brief verdict parsing ok")
+
+# freshness banner: never nags after a successful update; holidays and late files don't loop
+from rising import freshness  # noqa: E402
+
+T = pd.Timestamp
+wed = "2026-11-04"  # board data from Wednesday
+assert freshness(wed, {}, T("2026-11-05 12:00"))[0] == "ok"                                   # Thu noon: nothing new yet
+assert freshness(wed, {}, T("2026-11-05 19:30"))[0] == "stale"                                # Thu 7:30 pm: Thu file may be out
+ok = {"ok": True, "checked_at": "2026-11-05 19:45"}
+assert freshness(wed, ok, T("2026-11-05 22:00"))[0] == "ok"                                   # updated, NSE had nothing (holiday)
+assert freshness(wed, ok, T("2026-11-06 19:30"))[0] == "stale"                                # next evening: ask again
+assert freshness("2026-11-06", {"ok": True, "checked_at": "2026-11-06 20:00"}, T("2026-11-08 10:00"))[0] == "ok"  # weekend
+assert freshness(wed, {"ok": False, "checked_at": "2026-11-05 20:00", "error": "x"}, T("2026-11-05 21:00"))[0] == "failed"
+print("freshness banner ok")

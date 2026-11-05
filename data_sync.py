@@ -74,13 +74,37 @@ def sync_instruments(con, s, log=print):
                    select isin, symbol, company_name, series, current_date from e
                    on conflict (isin) do update set symbol = excluded.symbol, company_name = excluded.company_name,
                    series = excluded.series, updated_at = excluded.updated_at""")
+    merged = merge_isin_changes(con, e)
     con.unregister("e")
-    log(f"instruments: {len(e)} listed equities")
+    log(f"instruments: {len(e)} listed equities" + (f", {merged} ISIN changes merged" if merged else ""))
+
+
+def merge_isin_changes(con, current):
+    """A split / face-value change often gets a NEW ISIN for the same symbol. Move the old ISIN's price history and
+    results onto the current ISIN (keeping the current one's rows where both exist) and retire the old ISIN, so the
+    company keeps one continuous history. -> number of old ISINs merged."""
+    con.register("cur", current[["isin", "symbol"]])
+    pairs = con.execute("""select i.isin as old_isin, c.isin as new_isin from instruments i join cur c on i.symbol = c.symbol
+                           where i.isin <> c.isin""").fetchall()
+    con.unregister("cur")
+    for old, new in pairs:
+        con.execute("""insert or ignore into daily_market select ?, trade_date, open, high, low, close, volume, delivery_qty,
+                       delivery_pct, turnover_cr from daily_market where isin = ?""", [new, old])
+        con.execute("""insert or ignore into quarterly_results select ?, quarter_end, sales_cr, op_profit_cr, opm_pct,
+                       net_profit_cr from quarterly_results where isin = ?""", [new, old])
+        con.execute("update instruments set market_cap_cr = coalesce(market_cap_cr, (select market_cap_cr from instruments "
+                    "where isin = ?)), sector = coalesce(sector, (select sector from instruments where isin = ?)) where isin = ?",
+                    [old, old, new])
+        for tbl in ("daily_market", "quarterly_results", "instruments"):
+            con.execute(f"delete from {tbl} where isin = ?", [old])
+    return len(pairs)
 
 
 def bhavcopy(s, d):
     """-> DataFrame of one trading day, or None (holiday / not published yet)."""
     r = s.get(f"https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{d:%d%m%Y}.csv", timeout=30)
+    if r.status_code in (403, 429) or r.status_code >= 500:  # blocked / NSE down: fail loudly, don't pass as "holiday"
+        raise RuntimeError(f"NSE returned {r.status_code} for the {d:%d %b} price file — try again in a few minutes")
     if r.status_code != 200 or not r.text.startswith("SYMBOL"):
         return None
     b = pd.read_csv(io.StringIO(r.text), skipinitialspace=True)
@@ -106,7 +130,8 @@ def sync_prices(con, s, since, log=print):
             con.register("b", b)
             con.execute("""insert or replace into daily_market
                            select i.isin, b.trade_date, b.open, b.high, b.low, b.close, b.volume, b.delivery_qty,
-                                  b.delivery_pct, b.turnover_cr from b join instruments i using (symbol)""")
+                                  b.delivery_pct, b.turnover_cr from b join instruments i using (symbol)
+                           qualify row_number() over (partition by i.symbol order by i.updated_at desc nulls last) = 1""")
             con.unregister("b")
             added += 1
         if n % 50 == 0:
@@ -122,7 +147,10 @@ def sync_filings(con, s, days=7, log=print):
         stop = min(start + timedelta(days=6), end)
         r = s.get("https://www.nseindia.com/api/corporate-announcements?index=equities"
                   f"&from_date={start:%d-%m-%Y}&to_date={stop:%d-%m-%Y}", timeout=40)
-        items = r.json() if r.status_code == 200 else []
+        try:
+            items = r.json() if r.status_code == 200 else []
+        except ValueError:  # NSE sometimes answers with an HTML block page
+            items = []
         for x in items if isinstance(items, list) else []:
             rows.append(dict(filing_id=str(x.get("seq_id") or f"{x.get('symbol')}_{x.get('an_dt')}"), isin=x.get("sm_isin"),
                              symbol=x.get("symbol"), filing_datetime=pd.to_datetime(x.get("an_dt"), format="%d-%b-%Y %H:%M:%S", errors="coerce"),

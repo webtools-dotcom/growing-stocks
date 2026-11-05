@@ -12,7 +12,6 @@ Usage:
 """
 import io
 import json
-import os
 import sys
 from datetime import date, timedelta
 import duckdb
@@ -190,6 +189,8 @@ def scan():
         f = g.features(q, on)
         parts.append(f[f.index.isin(ids.index)].assign(qtr=q.date()))
     f = pd.concat(parts).join(g.inst.set_index("isin")[["symbol", "company_name", "market_cap_cr"]])
+    # one row per symbol: an ISIN change can leave two ISINs on one symbol (data_sync merges them; never crash on it)
+    f = f.sort_values("qtr").loc[lambda d: ~d.symbol.duplicated(keep="last")]
 
     # entry conditions exactly as the scan saw them (growth_screen.features applies these filters), so the app can
     # show why a company was or wasn't scanned using the same numbers
@@ -289,7 +290,46 @@ def industries():
     return pd.DataFrame({"industry": nse})
 
 
+STATE = DATA / "sync_state.json"
+PUBLISH_HOUR = 19  # NSE's end-of-day file is normally out by ~7 pm IST
+
+
+def _next_publish(d):
+    d = pd.Timestamp(d).normalize() + pd.Timedelta(days=1)
+    while d.weekday() >= 5:
+        d += pd.Timedelta(days=1)
+    return d + pd.Timedelta(hours=PUBLISH_HOUR)
+
+
+def freshness(asof, state, now):
+    """-> ("failed", when) | ("stale", publish time) | ("ok", None) for the app's banner.
+    New data can exist from 7 pm on the next weekday after `asof`. If an update already checked NSE after that
+    moment and found nothing (holiday, late file), move on to the next weekday — so it never nags after an update."""
+    checked = pd.Timestamp(state["checked_at"]) if state.get("checked_at") else None
+    if state and not state.get("ok", True):
+        return "failed", checked
+    pub = _next_publish(asof)
+    while checked is not None and checked >= pub:
+        pub = _next_publish(pub)
+    return ("stale", pub) if now >= pub else ("ok", None)
+
+
 def update():
+    """Run the whole daily update and record its outcome (data/sync_state.json) for the app's freshness banner."""
+    started = pd.Timestamp.now()
+    try:
+        out = _update()
+    except Exception as e:
+        STATE.write_text(json.dumps(dict(checked_at=str(started), ok=False, error=f"{type(e).__name__}: {e}"[:300])))
+        raise
+    con = duckdb.connect(str(DB), read_only=True)
+    latest = con.execute("select max(trade_date) from daily_market").fetchone()[0]
+    con.close()
+    STATE.write_text(json.dumps(dict(checked_at=str(started), ok=True, latest=str(latest))))
+    return out
+
+
+def _update():
     import data_sync
     from screener_refresh import refresh
     print("1/3 NSE end-of-day prices + filings...")
@@ -344,7 +384,11 @@ def update():
         con = duckdb.connect(str(DB), read_only=True)
         names = dict(con.execute("select symbol, company_name from instruments").fetchall())
         con.close()
-        found = alerts(list(dict.fromkeys(held + watch)), names)
+        try:  # network extras after the scan must never mark a good update as failed
+            found = alerts(list(dict.fromkeys(held + watch)), names)
+        except Exception as e:
+            found = {}
+            print(f"   alerts skipped: {e}")
         print(f"   alerts: {sum(map(len, found.values()))} red flags / negative headlines in the last 14 days"
               + (f" ({', '.join(found)})" if found else ""))
     if pos.exists() and settings.ai_ready():
@@ -368,9 +412,15 @@ def update():
     bt = DATA / "backtest.json"
     if not bt.exists() or (pd.Timestamp.now() - pd.Timestamp(bt.stat().st_mtime, unit="s")).days >= 7:
         print("   weekly scoreboard backtest...")
-        backtest()
+        try:
+            backtest()
+        except Exception as e:
+            print(f"   backtest skipped: {e}")
 
-    notify_changes(out, held, watch, found if (held or watch) else {})
+    try:
+        notify_changes(out, held, watch, found if (held or watch) else {})
+    except Exception as e:
+        print(f"   notification skipped: {e}")
     return out
 
 

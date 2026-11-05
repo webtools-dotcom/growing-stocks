@@ -1,4 +1,6 @@
 """Chart builders for the visual panels. One palette: colour only carries meaning (status, good/bad)."""
+from html import escape as _esc
+
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -170,8 +172,9 @@ def compare_radar(metrics, h=380):
         vals = list(m.values()) + [list(m.values())[0]]
         fig.add_trace(go.Scatterpolar(r=vals, theta=axes, name=sym, fill="toself", line=dict(color=col, width=1.6),
                                       opacity=.85, hovertemplate=f"<b>{sym}</b> %{{theta}}: %{{r:.0f}}/100<extra></extra>"))
-    fig.update_layout(height=h, margin=dict(l=40, r=40, t=30, b=20), paper_bgcolor="rgba(0,0,0,0)", dragmode=False,
-                      font=dict(family=FONT, size=10, color=C["dim"]), legend=dict(orientation="h", y=1.1, x=0),
+    fig.update_layout(height=h, margin=dict(l=40, r=40, t=30, b=40), paper_bgcolor="rgba(0,0,0,0)", dragmode=False,
+                      font=dict(family=FONT, size=10, color=C["dim"]),
+                      legend=dict(orientation="h", y=-.08, x=.5, xanchor="center", yanchor="top"),  # top legend hit the "margin" label
                       polar=dict(bgcolor="rgba(0,0,0,0)", radialaxis=dict(range=[0, 100], showticklabels=False, gridcolor=C["line"]),
                                  angularaxis=dict(gridcolor=C["line"], tickfont=dict(size=10, color=C["text"]))))
     return fig
@@ -357,11 +360,11 @@ def verdict_card_html(v, rules=None):
         if rules and key in rules:
             rv = rules[key][0]
             diff = abs(scale.index(rv) - idx) >= 1
-            cross = (f'<span class="xr" title="rule-based: {rules[key][1]}">{"≠ " if diff else ""}rules: '
+            cross = (f'<span class="xr" title="rule-based: {_esc(rules[key][1])}">{"≠ " if diff else ""}rules: '
                      f'<b style="color:{VERDICT_C[rv]}">{rv.lower()}</b></span>')
         cls = ' class="vall"' if key == "overall" else ""
         out.append(f'<div{cls}><span class="vl">{label}</span></div><div{cls}><div class="vm">{meter}</div></div>'
-                   f'<div{cls}><span class="vr"><b style="color:{VERDICT_C[verdict]}">{verdict}</b>{reason}</span>{cross}</div>')
+                   f'<div{cls}><span class="vr"><b style="color:{VERDICT_C[verdict]}">{verdict}</b>{_esc(reason)}</span>{cross}</div>')
     legend = '<div class="note" style="margin-top:.5rem">scale: best · good · average · bad · worse · critical — '              'for war &amp; oil risk, best = almost no exposure, critical = very likely to fall sharply on escalation</div>'
     return f'<div class="vc">{"".join(out)}</div>{legend}'
 
@@ -389,9 +392,10 @@ def panic_bars(p, h=150):
     fig = go.Figure(go.Bar(
         y=["market", "this stock"], x=[p["market_avg"] * 100, p["stock_avg"] * 100], orientation="h",
         marker_color=[C["muted"], C["red"] if p["ratio"] > 1.2 else C["amber"] if p["ratio"] > .9 else C["green"]],
-        text=[f"{p['market_avg']:+.1%}", f"{p['stock_avg']:+.1%} ({p['ratio']:.1f}×)"], textposition="outside",
+        text=[f"{p['market_avg']:+.1%}", f"{p['stock_avg']:+.1%} ({p['ratio']:.1f}×)"], textposition="inside",
+        insidetextanchor="middle", textfont=dict(color=[C["text"], "#0f0f0c"], size=11),  # outside labels collided with the axis on narrow screens
         hovertemplate="%{y}: %{x:.1f}% average<extra>on the " + str(p["days"]) + " worst market days</extra>"))
-    fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=60, t=4, b=0))
-    fig.update_xaxes(ticksuffix="%", range=[min(p["market_avg"], p["stock_avg"]) * 100 * 1.5, 0])
+    fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=10, t=4, b=0))
+    fig.update_xaxes(ticksuffix="%", range=[min(p["market_avg"], p["stock_avg"]) * 100 * 1.1, 0])
     fig.update_yaxes(tickfont=dict(color=C["text"]))
     return fig

@@ -4,7 +4,6 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta
 
 import duckdb
 import pandas as pd
@@ -50,8 +49,8 @@ a {{ color: {C['blue']} !important; text-decoration: none; }}
 [data-testid="stExpander"] details {{ border: 1px solid {C['line']}; }}
 [data-testid="stExpander"] summary p {{ font-size: .8rem; color: {C['dim']}; }}
 label p {{ font-size: .74rem !important; color: {C['dim']} !important; }}
-[data-baseweb="tag"] {{ background: transparent !important; border: 1px solid {C['line']}; }}
-[data-baseweb="tag"] span {{ color: {C['text']}; font-size: .74rem; }}
+[data-baseweb="tag"], [data-tag] {{ background: transparent !important; border: 1px solid {C['line']}; }}
+[data-baseweb="tag"] span, [data-tag] span, [data-tag] {{ color: {C['text']} !important; font-size: .74rem; }}
 .bar {{ display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }}
 .brand {{ font-weight: 600; letter-spacing: .14em; font-size: .95rem; }}
 .meta {{ color: {C['dim']}; font-size: .8rem; }}
@@ -62,6 +61,8 @@ label p {{ font-size: .74rem !important; color: {C['dim']} !important; }}
        margin: 2rem 0 .55rem; padding-bottom: .35rem; border-bottom: 1px solid {C['line']};
        display: flex; justify-content: space-between; }}
 .sec span {{ letter-spacing: 0; text-transform: none; }}
+@media (max-width: 640px) {{ .sec {{ flex-direction: column; align-items: flex-start; gap: .2rem; }} .sec span {{ text-align: left; }} }}
+.tw {{ overflow-x: auto; }}
 .t {{ width: 100%; border-collapse: collapse; font-size: .82rem; border: none !important; }}
 .t th, .t td {{ border-left: none !important; border-right: none !important; border-top: none !important; background: transparent; }}
 .t th {{ color: {C['dim']}; font-weight: 400; text-align: left; padding: .3rem 1.2rem .35rem 0;
@@ -108,6 +109,7 @@ label p {{ font-size: .74rem !important; color: {C['dim']} !important; }}
 .vm {{ display: flex; gap: 2px; }} .vm i {{ flex: 1; height: 7px; background: #1f201a; }}
 .vm i.on {{ outline: 1px solid {C['text']}; }}
 .vr {{ color: {C['text']}; }} .vr b {{ font-weight: 600; margin-right: .4rem; }}
+@media (max-width: 640px) {{ .vc {{ grid-template-columns: 1fr 7.5rem; }} .vc > div:nth-child(3n) {{ grid-column: 1 / -1; margin-bottom: .3rem; }} }}
 .vc .vall {{ border-top: 1px solid {C['line']}; padding-top: .45rem; }}
 .xr {{ display: block; color: {C['dim']}; font-size: .68rem; margin-top: .1rem; cursor: help; }}
 </style>""", unsafe_allow_html=True)
@@ -227,7 +229,7 @@ def table(rows, cols, numeric=()):
     th = "".join(f'<th class="{"n" if k in numeric else ""}">{h}</th>' for k, h in cols)
     tr = "".join("<tr>" + "".join(f'<td class="{"n" if k in numeric else "wrap" if k == "_wrap" else ""}">{r.get(k, "")}</td>'
                                   for k, _ in cols) + "</tr>" for r in rows)
-    return f'<table class="t"><tr>{th}</tr>{tr}</table>'
+    return f'<div class="tw"><table class="t"><tr>{th}</tr>{tr}</table></div>'
 
 
 def sec(title, right=""):
@@ -392,7 +394,10 @@ def growth_story(fd):
         try:
             scores = insights.trap_scores(fd, sym, px_ if len(px_) else None)
         except Exception as e:
-            scores, err = None, e
+            scores = None
+            sec("safety check")
+            show(f'<div class="note">safety check unavailable right now ({esc(type(e).__name__)}: {esc(str(e)[:120])}) — '
+                 'usually NSE being slow; reopen the stock in a minute.</div>')
     if scores:
         worst = sorted(scores, key=lambda s: s[1])
         sec("safety check", "full shape = safe · every dent is a specific risk · hover a point for the evidence")
@@ -424,7 +429,7 @@ def growth_story(fd):
         with c2 if has_cap else c1:
             if orders["book"] and bridge:
                 b_ = orders["book"]
-                show(f'<div class="meta">order book: years of sales already booked</div>')
+                show('<div class="meta">order book: years of sales already booked</div>')
                 st.plotly_chart(viz.order_gauge(b_["value_cr"], bridge["ttm_sales"]), width="stretch", config=PLOT)
                 show(f'<div class="note">₹{b_["value_cr"]:,} Cr order book (<a href="{b_["url"]}" target="_blank">'
                      f'{esc(b_["source"]).lower()}, {b_["date"]}</a>) vs ₹{bridge["ttm_sales"]:,.0f} Cr sales in the last 12 months</div>')
@@ -610,14 +615,20 @@ if right.button("update data", width="stretch", help="prices + NSE filings + new
 show('<div class="legend">leader = growing + already ran &gt;80% · emerging = growth accelerating, price confirmed · '
      'wait = watch only, buy above trigger · exit = −20% stop or 6-month review · research tool, not advice</div>')
 
-# NSE publishes end-of-day data ~6 pm IST; expect the last weekday's data after 7 pm.
-# ponytail: ignores exchange holidays, so on a holiday this nags once — harmless.
-now = datetime.now()
-expected = now.date() if now.hour >= 19 else now.date() - timedelta(days=1)
-while expected.weekday() >= 5:
-    expected -= timedelta(days=1)
-if asof.date() < expected:
-    show(f'<div class="flag warn">newer market data is out ({expected:%a %d %b}) — click <b>update data</b></div>')
+# Freshness: NSE publishes a trading day's file ~6–8 pm IST. New data can exist once 7 pm has passed on the next
+# weekday after the board's date. If an update already checked NSE after that moment and found nothing (holiday,
+# late file), stay quiet until the following weekday — so the banner never nags after a successful update.
+state_p = DATA / "sync_state.json"
+try:
+    state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
+except ValueError:  # half-written file
+    state = {}
+kind, when = rising.freshness(asof, state, pd.Timestamp.now())
+if kind == "failed":
+    show(f'<div class="flag">last update failed{f" ({when:%d %b %H:%M})" if when is not None else ""}: {esc(state.get("error", ""))}<br>'
+         '<span class="dim">the board still shows older data. click <b>update data</b> to retry.</span></div>')
+elif kind == "stale":
+    show(f'<div class="flag warn">newer market data may be out ({when:%a %d %b}) — click <b>update data</b></div>')
 
 excl = st.session_state.get("excl", [i for i in DEFAULT_EXCLUDE if i in set(b.industry.dropna())])
 watch = WATCH.read_text().split() if WATCH.exists() else []

@@ -297,7 +297,6 @@ def alerts(symbols, names, days=14, log=print):
     """Daily bad-news check for holdings/watchlist — red-flag filings + negative headlines. No AI, no tokens.
     -> {symbol: [dict(date, kind, text, url)]}, written to data/alerts.json."""
     session, out = nse_session(), {}
-    cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
     for s in symbols:
         items = []
         try:

@@ -13,7 +13,7 @@ from datetime import date
 
 import pandas as pd
 
-from config import DATA, DB, nse_session
+from config import DATA, nse_session
 
 CACHE = DATA / "insights"
 

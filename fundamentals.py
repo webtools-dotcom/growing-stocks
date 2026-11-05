@@ -9,6 +9,7 @@ import re
 import sys
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -99,10 +100,12 @@ def checklist(f):
 
     sales_q = _row(q, "Sales")
     if len(sales_q) >= 8:
-        yoy = (sales_q.iloc[-4:].values / sales_q.iloc[-8:-4].values - 1)
+        prev = sales_q.iloc[-8:-4].values
+        yoy = sales_q.iloc[-4:].values / np.where(prev > 0, prev, np.nan) - 1  # no sales a year ago: no growth figure
         n = int((yoy > .10).sum())
         out.append(("pass" if n == 4 else "watch" if n == 3 else "fail", "Sales growing every quarter",
-                    f"{n} of last 4 quarters up >10% vs a year ago (" + ", ".join(f"{x:+.0%}" for x in yoy) + ")"))
+                    f"{n} of last 4 quarters up >10% vs a year ago ("
+                    + ", ".join("n/a" if pd.isna(x) else f"{x:+.0%}" for x in yoy) + ")"))
 
     g = f.get("growth", {})
     s_ttm = g.get("Compounded Sales Growth", {}).get("TTM")
