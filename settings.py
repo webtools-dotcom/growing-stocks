@@ -2,11 +2,11 @@
 Secret Service) via `keyring` — never in a plain file, never in the repo. Non-secret choices (provider, model)
 go to data/settings.json. Environment variables / .env still work and take priority (handy for servers/CI).
 """
-import json
 import os
 from pathlib import Path
 
 import keyring
+from safeio import read_json, save_json
 
 SERVICE = "rising-stocks-terminal"
 FILE = Path(__file__).resolve().parent / "data" / "settings.json"
@@ -26,7 +26,7 @@ _ENV = {v: os.getenv(v) for v in [p[0] for p in PROVIDERS.values()] + ["DEFAULT_
 
 
 def load():
-    s = json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else {}
+    s = read_json(FILE, {})
     s.setdefault("provider", "gemini")
     s.setdefault("model", PROVIDERS[s["provider"]][1])
     return s
@@ -45,7 +45,7 @@ def get_key(provider):
 def save(provider, model, key=None):
     """key=None keeps the stored key; key="" deletes it."""
     FILE.parent.mkdir(exist_ok=True)
-    FILE.write_text(json.dumps({"provider": provider, "model": model.strip()}, indent=2), encoding="utf-8")
+    save_json(FILE, {"provider": provider, "model": model.strip()}, indent=2)
     env = PROVIDERS[provider][0]
     if key == "":
         try:

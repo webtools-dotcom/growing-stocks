@@ -1,6 +1,5 @@
 """Rising Stocks Terminal. Run:  streamlit run app.py"""
 import html
-import json
 import os
 import subprocess
 import sys
@@ -16,6 +15,7 @@ import fundamentals  # full financials + growth checklist
 import rising  # exit rule + alert logic (shared with backtests)
 import settings  # API keys in the OS keychain
 from config import DATA, DB, HERE
+from safeio import read_json, save_csv, save_json, save_text
 from data_sync import adjust_prices
 import insights  # trap scores, capacity bridge, order book, valuation, smart money
 from viz import C, PLOT, STATUS_C, chart_layout
@@ -619,10 +619,7 @@ show('<div class="legend">leader = growing + already ran &gt;80% · emerging = g
 # weekday after the board's date. If an update already checked NSE after that moment and found nothing (holiday,
 # late file), stay quiet until the following weekday — so the banner never nags after a successful update.
 state_p = DATA / "sync_state.json"
-try:
-    state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
-except ValueError:  # half-written file
-    state = {}
+state = read_json(state_p, {})
 kind, when = rising.freshness(asof, state, pd.Timestamp.now())
 if kind == "failed":
     show(f'<div class="flag">last update failed{f" ({when:%d %b %H:%M})" if when is not None else ""}: {esc(state.get("error", ""))}<br>'
@@ -643,12 +640,12 @@ def snapshot_thesis(sym, thesis):
     """Freeze the growth check when you write why you bought, so it can be compared every quarter."""
     THESIS.mkdir(exist_ok=True)
     p_ = THESIS / f"{sym}.json"
-    old = json.loads(p_.read_text(encoding="utf-8")) if p_.exists() else None
+    old = read_json(p_)
     if old and old.get("thesis") == thesis:
         return
     f = fundamentals.get(sym)
     checks = {t_: v_ for v_, t_, _ in fundamentals.checklist(f)} if f else {}
-    p_.write_text(json.dumps(dict(thesis=thesis, date=str(pd.Timestamp.now().date()), checks=checks)), encoding="utf-8")
+    save_json(p_, dict(thesis=thesis, date=str(pd.Timestamp.now().date()), checks=checks))
 bs = b.set_index("symbol")
 
 t_today, t_board, t_stock, t_cmp, t_sec, t_fil, t_watch, t_hist = st.tabs(
@@ -688,7 +685,7 @@ with t_today:
         if st.button("save positions"):
             edited = edited.dropna(subset=["symbol"]).assign(symbol=lambda d: d.symbol.str.upper().str.strip(),
                                                              thesis=lambda d: d.thesis.fillna("").astype(str))
-            edited.to_csv(POS, index=False)
+            save_csv(edited, POS, index=False)
             for r_ in edited.itertuples():
                 if r_.thesis.strip():
                     snapshot_thesis(r_.symbol, r_.thesis.strip())
@@ -700,7 +697,9 @@ with t_today:
         p_ = THESIS / f"{r_.symbol}.json"
         if not r_.thesis.strip() or not p_.exists():
             continue
-        snap = json.loads(p_.read_text(encoding="utf-8"))
+        snap = read_json(p_)
+        if not snap:
+            continue
         f_ = load_fundamentals(r_.symbol)
         now_c = {t_: v_ for v_, t_, _ in fundamentals.checklist(f_)} if f_ else {}
         dot = lambda v_: f'<span class="{MARK.get(v_, ("·", "dim"))[1]}">●</span>'
@@ -721,8 +720,8 @@ with t_today:
                 st.markdown(c[1])
 
     al_path = DATA / "alerts.json"
-    if al_path.exists():
-        al = json.loads(al_path.read_text(encoding="utf-8"))
+    al = read_json(al_path)
+    if al:
         sec("news & red flags", f"holdings + watchlist · last {al['days']} days · checked {al['checked']} · no AI")
         rows = [dict(sym=f"<b>{esc(s)}</b>" + (' <span class="am">holding</span>' if s in set(pos.symbol) else ""),
                      d=esc(i["date"]), k=f'<span class="{"dn" if i["kind"] == "news" else "am"}">{i["kind"]}</span>',
@@ -766,8 +765,8 @@ with t_today:
 # ---------------------------------------------------------------- board
 with t_board:
     fn_p = DATA / "funnel.json"
-    if fn_p.exists():
-        fn = json.loads(fn_p.read_text(encoding="utf-8"))
+    fn = read_json(fn_p)
+    if fn:
         R = rising.RULES
         with st.expander(f"how {fn['listed']:,} listed companies become this list — the full method", expanded=False):
             c1, c2 = st.columns([3, 2], gap="large")
@@ -914,8 +913,8 @@ with t_stock:
                     show('<div class="meta">label history</div>')
                     st.plotly_chart(viz.label_timeline(hh), width="stretch", config=PLOT)
                 bt_p = DATA / "backtest.json"
-                if e["label"] in ("LEADER", "EMERGING", "WAIT") and bt_p.exists():
-                    bt_ = pd.DataFrame(json.loads(bt_p.read_text(encoding="utf-8")))
+                if e["label"] in ("LEADER", "EMERGING", "WAIT") and read_json(bt_p):
+                    bt_ = pd.DataFrame(read_json(bt_p))
                     mine, rest = bt_[bt_.status == e["label"]], bt_[bt_.status == "everything else"]
                     if len(mine):
                         show(f'<div class="note">track record of this label in the backtest: median '
@@ -1058,7 +1057,7 @@ with t_fil:
 with t_watch:
     txt = st.text_area("symbols, space or newline separated", " ".join(watch), height=80)
     if st.button("save watchlist"):
-        WATCH.write_text("\n".join(txt.upper().split()))
+        save_text(WATCH, "\n".join(txt.upper().split()))
         st.rerun()
     rows = []
     for s_ in watch:
@@ -1081,8 +1080,8 @@ with t_watch:
 # ---------------------------------------------------------------- history
 with t_hist:
     bt = DATA / "backtest.json"
-    if bt.exists():
-        rows = json.loads(bt.read_text(encoding="utf-8"))
+    rows = read_json(bt)
+    if rows:
         sec("does it work? backtest", "median 6-month return of each label vs every other stock · bought at each results season")
         st.plotly_chart(viz.scoreboard(rows), width="stretch", config=PLOT)
         show('<div class="note">tall amber/green bars above the grey "everything else" bar = the labels picked better than the market. '

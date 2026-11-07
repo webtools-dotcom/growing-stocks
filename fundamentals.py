@@ -15,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import DATA
+from safeio import read_json, save_json
 from screener_refresh import H, table
 
 CACHE = DATA / "fundamentals"
@@ -66,12 +67,12 @@ def get(sym, max_age_days=7, refresh=False):
     """-> dict with DataFrames under 'tables', or None if Screener has no page."""
     CACHE.mkdir(parents=True, exist_ok=True)
     p = CACHE / f"{sym.upper()}.json"
-    d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    d = read_json(p)
     stale = d is None or "about" not in d or (date.today() - date.fromisoformat(d["fetched"])).days > max_age_days
     if refresh or stale:
         fresh = fetch(sym.upper())
         if fresh:
-            p.write_text(json.dumps(fresh), encoding="utf-8")
+            save_json(p, fresh)
             d = fresh
     if d is None:
         return None

@@ -23,6 +23,7 @@ import pandas as pd
 import requests
 
 from config import DATA, DB, nse_session
+from safeio import read_json, save_json
 
 BRIEFS = DATA / "briefs"
 
@@ -311,8 +312,7 @@ def alerts(symbols, names, days=14, log=print):
             log(f"   alerts {s} news: {e}")
         if items:
             out[s] = items
-    (DATA / "alerts.json").write_text(json.dumps(dict(checked=f"{pd.Timestamp.now():%d %b %H:%M}", days=days, items=out),
-                                                 ensure_ascii=False), encoding="utf-8")
+    save_json(DATA / "alerts.json", dict(checked=f"{pd.Timestamp.now():%d %b %H:%M}", days=days, items=out), ensure_ascii=False)
     return out
 
 
@@ -374,13 +374,12 @@ def brief(symbol, status="", force=False, log=print):
     key = hashlib.sha1(stable.encode()).hexdigest()[:12]
     BRIEFS.mkdir(parents=True, exist_ok=True)
     cache = BRIEFS / f"{symbol}_{key}.json"
-    if cache.exists() and not force:
-        d = json.loads(cache.read_text(encoding="utf-8"))
+    d = None if force else read_json(cache)
+    if d:
         return d["markdown"], d["sources"]
     md, usage = llm(prompt)
     md, verdicts = split_verdicts(md)
-    cache.write_text(json.dumps(dict(markdown=md, sources=sources, usage=usage, prompt_chars=len(prompt), verdicts=verdicts),
-                                ensure_ascii=False), encoding="utf-8")
+    save_json(cache, dict(markdown=md, sources=sources, usage=usage, prompt_chars=len(prompt), verdicts=verdicts), ensure_ascii=False)
     return md, sources
 
 
@@ -404,7 +403,9 @@ def latest_cached(symbol):
     files = sorted(BRIEFS.glob(f"{symbol.upper()}_*.json"), key=lambda p: p.stat().st_mtime) if BRIEFS.exists() else []
     if not files:
         return None
-    d = json.loads(files[-1].read_text(encoding="utf-8"))
+    d = read_json(files[-1])
+    if not d:
+        return None
     return (pd.Timestamp(files[-1].stat().st_mtime, unit="s").date(), d["markdown"], d["sources"], d.get("usage") or {},
             d.get("verdicts") or {})
 

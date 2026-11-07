@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+from safeio import save_csv
 from bs4 import BeautifulSoup
 
 DATA = Path(__file__).resolve().parent / "data"
@@ -99,8 +100,8 @@ def refresh(syms, pause=1.2, log=print):
     if len(old_m):
         old_m = old_m[~old_m.symbol.isin(done)]
         old_q = old_q[~old_q.symbol.isin(done)]
-    pd.concat([old_m, pd.DataFrame(metas)]).to_csv(META_CACHE, index=False)
-    pd.concat([old_q, *qs]).to_csv(Q_CACHE, index=False)
+    pd.concat([old_m, pd.DataFrame(metas)]).pipe(save_csv, META_CACHE, index=False)
+    pd.concat([old_q, *qs]).pipe(save_csv, Q_CACHE, index=False)
     return len(metas)
 
 

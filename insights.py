@@ -7,13 +7,13 @@ Traps:         trap_scores — a 7-axis safety profile (exchange surveillance, c
                insider selling, core profit, liquidity/operator risk). 100 = safe.
 Valuation:     pe_history — P/E through time vs its own median, and PEG.
 """
-import json
 import re
 from datetime import date
 
 import pandas as pd
 
 from config import DATA, nse_session
+from safeio import read_json, save_json
 
 CACHE = DATA / "insights"
 
@@ -23,9 +23,11 @@ def _cached(name, days, fetch):
     CACHE.mkdir(parents=True, exist_ok=True)
     p = CACHE / f"{name}.json"
     if p.exists() and (date.today() - date.fromtimestamp(p.stat().st_mtime)).days < days:
-        return json.loads(p.read_text(encoding="utf-8"))
+        d = read_json(p)
+        if d is not None:
+            return d
     data = fetch()
-    p.write_text(json.dumps(data, default=str), encoding="utf-8")
+    save_json(p, data, default=str)
     return data
 
 

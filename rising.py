@@ -11,7 +11,6 @@ Usage:
   python rising.py scan     # scan only, from cached data
 """
 import io
-import json
 import sys
 from datetime import date, timedelta
 import duckdb
@@ -19,6 +18,7 @@ import pandas as pd
 
 import settings
 from config import DATA, DB, nse_session
+from safeio import read_json, save_csv, save_json, save_text
 
 BOARD, HISTORY = DATA / "rising_latest.csv", DATA / "rising_history.csv"
 
@@ -131,7 +131,7 @@ def results_calendar():
     cal = pd.DataFrame(r.json())
     cal = cal[cal.purpose.str.contains("Result", case=False, na=False)]
     cal["date"] = pd.to_datetime(cal.date, format="%d-%b-%Y").dt.date
-    cal[["symbol", "date", "purpose"]].to_csv(DATA / "results_calendar.csv", index=False)
+    cal[["symbol", "date", "purpose"]].pipe(save_csv, DATA / "results_calendar.csv", index=False)
     return len(cal)
 
 
@@ -169,7 +169,7 @@ def backtest():
     """Forward 6m returns of each status bucket at every past results season (no look-ahead)."""
     d = backtest_rules(season_data(refresh=True))
     # saved for the app's scoreboard chart
-    (DATA / "backtest.json").write_text(d.assign(on=d.on.astype(str)).to_json(orient="records"), encoding="utf-8")
+    save_text(DATA / "backtest.json", d.assign(on=d.on.astype(str)).to_json(orient="records"))
     pd.set_option("display.width", 200)
     print(d.assign(**{c: d[c].map("{:+.0%}".format) for c in ["median", "hit", "p10"]}).to_string(index=False))
     print("\nCompleted 6m windows, averaged across seasons:")
@@ -200,7 +200,7 @@ def scan():
     (pd.DataFrame({"qtr": lq.quarter_end.dt.date, "sales": lq.sales_cr, "pat": lq.net_profit_cr,
                    "turn_cr": turn60.reindex(lq.index)})
      .join(g.inst.set_index("isin").symbol).assign(scanned=lambda d: d.index.isin(f.index))
-     .to_csv(DATA / "entry.csv", index=False))
+     .pipe(save_csv, DATA / "entry.csv", index=False))
 
     i = len(g.adj) - 1
     hist = g.adj.iloc[max(0, i - 250): i + 1]
@@ -226,18 +226,18 @@ def scan():
     # everything the "how it was ranked" panels need: every scanned stock (for the crowd strips) + funnel counts
     keep = ["symbol", "status", "close", "dma200", "high52", "streak", "sales_yoy", "pat_yoy", "seq_ups", "sales_yoy_2",
             "opm_chg", "above_200", "off_high", "ret1y", "ret3m", "lumpy", "qtr"]
-    f[keep].to_csv(DATA / "universe.csv", index=False)
+    f[keep].pipe(save_csv, DATA / "universe.csv", index=False)
     # the market's day-by-day move (median of liquid stocks) — used to measure how a stock behaves on panic days
     liquid = g.turn.rolling(60, min_periods=20).median() >= 1
     mret = g.adj.pct_change(fill_method=None).where(liquid).median(axis=1)
-    mret.rename("market").dropna().to_frame().to_csv(DATA / "market_days.csv")
+    mret.rename("market").dropna().to_frame().pipe(save_csv, DATA / "market_days.csv")
     R = RULES
     gp = (f.streak >= R["streak"]) & (f.sales_yoy > R["sales_yoy"]) & (f.pat_yoy > R["pat_yoy"]) & (f.seq_ups >= R["seq_ups"])
     ap = gp & ((f.sales_yoy > f.sales_yoy_2) | (f.opm_chg > 0))
-    (DATA / "funnel.json").write_text(json.dumps(dict(
+    save_json(DATA / "funnel.json", dict(
         listed=int(len(g.inst)), recent=int(sum(len(ids) for q, ids in latest.groupby(latest) if q >= on - pd.Timedelta(days=200))),
         scanned=int(len(f)), growth=int(gp.sum()), accel=int(ap.sum()),
-        labels={k: int(v) for k, v in f.status.value_counts().items()}, asof=str(on.date()))), encoding="utf-8")
+        labels={k: int(v) for k, v in f.status.value_counts().items()}, asof=str(on.date())))
     b = b.join(industries(), on="symbol")
     meta = pd.read_csv(DATA / "screener_meta.csv") if (DATA / "screener_meta.csv").exists() else pd.DataFrame(columns=["symbol"])
     b = b.join(meta.set_index("symbol")[[c for c in ("pe", "roce", "capex") if c in meta]], on="symbol")
@@ -256,12 +256,12 @@ def scan():
     out = pd.concat([b.reset_index(drop=True), broke], ignore_index=True)
     order = {"LEADER": 0, "EMERGING": 1, "WAIT": 2, "BROKE": 3}
     out = out.sort_values(["status", "score"], key=lambda s: s.map(order) if s.name == "status" else -s.fillna(0))
-    out.to_csv(BOARD, index=False)
+    out.pipe(save_csv, BOARD, index=False)
     h = out[["asof", "symbol", "status", "close", "score"]]
     if HISTORY.exists():
         old = pd.read_csv(HISTORY)
         h = pd.concat([old[old["asof"] != str(on.date())], h])
-    h.to_csv(HISTORY, index=False)
+    h.pipe(save_csv, HISTORY, index=False)
     print(f"{on.date()}: " + ", ".join(f"{k} {v}" for k, v in out.status.value_counts().items()))
     return out
 
@@ -275,7 +275,7 @@ def refresh_industries():
         if r.ok and r.text.startswith("Company Name"):
             parts.append(pd.read_csv(io.StringIO(r.text))[["Symbol", "Industry"]])
     if parts:
-        pd.concat(parts).drop_duplicates("Symbol").set_axis(["symbol", "industry"], axis=1).to_csv(DATA / "industry.csv", index=False)
+        pd.concat(parts).drop_duplicates("Symbol").set_axis(["symbol", "industry"], axis=1).pipe(save_csv, DATA / "industry.csv", index=False)
 
 
 def industries():
@@ -320,12 +320,12 @@ def update():
     try:
         out = _update()
     except Exception as e:
-        STATE.write_text(json.dumps(dict(checked_at=str(started), ok=False, error=f"{type(e).__name__}: {e}"[:300])))
+        save_json(STATE, dict(checked_at=str(started), ok=False, error=f"{type(e).__name__}: {e}"[:300]))
         raise
     con = duckdb.connect(str(DB), read_only=True)
     latest = con.execute("select max(trade_date) from daily_market").fetchone()[0]
     con.close()
-    STATE.write_text(json.dumps(dict(checked_at=str(started), ok=True, latest=str(latest))))
+    save_json(STATE, dict(checked_at=str(started), ok=True, latest=str(latest)))
     return out
 
 
@@ -445,9 +445,8 @@ $app = '{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\power
 
 def notify_changes(out, held, watch, found):
     """Toast only what's new since the last notification: exits, triggers, red flags, results tomorrow."""
-    import json
     seen_p = DATA / "notified.json"
-    seen = set(json.loads(seen_p.read_text())) if seen_p.exists() else set()
+    seen = set(read_json(seen_p, []))
     msgs = []
     pos = DATA / "positions.csv"
     if held and pos.exists():
@@ -476,7 +475,7 @@ def notify_changes(out, held, watch, found):
         notify(title, body)
     if len(new) > 5:
         notify(f"{len(new) - 5} more alerts", "open Rising Stocks → today")
-    seen_p.write_text(json.dumps(sorted(seen | {m[0] for m in new})))
+    save_json(seen_p, sorted(seen | {m[0] for m in new}))
 
 
 if __name__ == "__main__":
