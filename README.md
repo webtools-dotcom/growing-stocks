@@ -208,18 +208,20 @@ Ideas that were tested and **dropped** because they did not survive the longer h
 above 100%, a hard volatility filter, a market-breadth regime switch, and momentum as a ranking factor (it worked
 in rising markets and lost money in the 2024–25 fall).
 
-**Exit rule** (`exit_backtest.py`, 174 completed trades, entries Dec 2024 – Dec 2025):
+**Exit rule** (`exit_backtest.py`, 209 completed trades from every results season since mid-2023; every rule
+exits by six months at the latest, so they are compared like for like):
 
-| Exit | Mean | Median | Worst trade |
-|---|---:|---:|---:|
-| Hold six months | +11.4% | +7.0% | −48.5% |
-| **−20% stop, review at six months** (current) | +9.6% | +1.0% | **−34.3%** |
-| Sell when growth breaks | +19.5% | +10.6% | −41.3% |
-| Growth break or −20% stop | +15.0% | +3.7% | −34.3% |
+| Exit | Mean | Median | Picks up | Worst trade | Worst 10% |
+|---|---:|---:|---:|---:|---:|
+| Hold six months, no stop | +8.2% | +3.6% | 54% | −50% | −27% |
+| **−20% stop, review at six months** (current) | +5.6% | −4.6% | 46% | **−34%** | **−22%** |
+| Sell when quarterly growth breaks | +7.1% | +3.6% | 52% | −54% | −26% |
+| Growth break or −20% stop | +4.7% | −3.1% | 45% | −34% | −22% |
 
-The stop is insurance: it caps the worst loss but gives up some return. Selling when quarterly growth breaks did best
-in this test; with only five entry seasons it is shown as a warning on your positions rather than an automatic exit,
-and is the leading candidate for the next version of the rule.
+The stop is insurance, and it has a price: about 2½ points of average return, in exchange for cutting the worst
+trade from −50% to −34%. That suits a small account that can't afford one disaster; a larger, diversified portfolio
+might prefer to hold. Selling when growth breaks looked better in an earlier test only because that version held for
+up to a year; at the same horizon it adds nothing, so it stays a warning on your positions, not an exit.
 
 ---
 

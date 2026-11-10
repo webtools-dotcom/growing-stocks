@@ -13,7 +13,7 @@ import growth_screen as g
 from rising import classify
 
 MAX_DAYS = 250   # hard cap: one year
-SEASONS = pd.date_range("2024-12-31", "2026-06-30", freq="QE")
+SEASONS = pd.date_range("2023-06-30", "2026-06-30", freq="QE")  # prices back to 2022 (data_sync backfill)
 
 adj = g.adj
 dma200 = adj.rolling(200, min_periods=150).mean()
@@ -56,6 +56,8 @@ def walk(isin, i0, q0, rule):
         for part in rule.split("+"):
             if part == "hold6m":
                 hit |= j - i0 >= 126
+            elif part == "hold12m":
+                hit |= j - i0 >= 250
             elif part.startswith("trail"):
                 hit |= c < peak * (1 - int(part[5:]) / 100)
             elif part.startswith("stop"):
@@ -71,8 +73,12 @@ def walk(isin, i0, q0, rule):
     return p[last] / entry - 1, last - i0, last == len(p) - 1 and last - i0 < MAX_DAYS
 
 
-RULES = ["hold6m", "trail15", "trail20", "trail25", "stop15+hold6m", "stop20+hold6m", "stop25+hold6m",
-         "dma50", "dma200", "growth", "growth+stop20", "growth+stop25", "growth+trail20", "growth+trail25", "growth+dma200"]
+# 6-month horizon (compare these with each other) and 12-month horizon (compare with hold12m)
+RULES6 = ["hold6m", "stop15+hold6m", "stop20+hold6m", "stop25+hold6m", "growth+hold6m", "growth+stop20+hold6m",
+          "growth+stop25+hold6m", "trail20+hold6m", "dma200+hold6m"]
+RULES12 = ["hold12m", "stop20+hold12m", "growth+hold12m", "growth+stop20+hold12m", "growth+stop25+hold12m",
+           "trail25+hold12m", "dma200+hold12m"]
+RULES = RULES6 + RULES12
 
 
 def run():
@@ -93,12 +99,13 @@ def run():
     return pd.DataFrame(rows)
 
 
-def summarize(t, title):
+def summarize(t, title, rules=None):
+    rules = rules or RULES
     s = t.groupby("rule").agg(trades=("ret", "size"), mean=("ret", "mean"), median=("ret", "median"),
                               hit=("ret", lambda x: (x > 0).mean()), worst=("ret", "min"),
                               p10=("ret", lambda x: x.quantile(.1)), days=("days", "mean"), still_open=("open", "mean"))
     s["per_100d"] = s["mean"] / s.days * 100  # return per 100 trading days in the trade (capital efficiency)
-    s = s.reindex(RULES)
+    s = s.reindex([r for r in rules if r in s.index])
     print(f"\n== {title} ==")
     fmt = {c: "{:+.1%}".format for c in ["mean", "median", "hit", "worst", "p10", "still_open", "per_100d"]}
     print(s.to_string(formatters=fmt | {"days": "{:.0f}".format}))
@@ -108,16 +115,15 @@ if __name__ == "__main__":
     t = run()
     t.to_csv(g.Path(__file__).resolve().parent / "data" / "exit_trades.csv", index=False)
     t = t.assign(season=pd.to_datetime(t.season))
-    # entries with a full 126 trading days of data after them
-    mature = t[t.season.map(lambda q: adj.index.searchsorted(q + pd.Timedelta(days=g.LAG_DAYS)) + 126 < len(adj))]
-    print("mature entries per season:", mature[mature.rule == "hold6m"].groupby("season").size().to_dict())
-    summarize(mature, "Entries with 6m+ of history")
+    start = lambda q: adj.index.searchsorted(q + pd.Timedelta(days=g.LAG_DAYS))
+    m6 = t[t.season.map(lambda q: start(q) + 126 < len(adj)) & t.rule.isin(RULES6)]
+    m12 = t[t.season.map(lambda q: start(q) + 250 < len(adj)) & t.rule.isin(RULES12)]
+    print("6-month windows complete, entries per season:", m6[m6.rule == "hold6m"].groupby("season").size().to_dict())
+    print("12-month windows complete, entries per season:", m12[m12.rule == "hold12m"].groupby("season").size().to_dict())
+    summarize(m6, "6-MONTH HORIZON (exit at 6 months at the latest)", RULES6)
+    summarize(m12, "12-MONTH HORIZON (exit at 12 months at the latest)", RULES12)
     for st in ("EMERGING", "LEADER"):
-        summarize(mature[mature.status == st], f"{st} only, mature entries")
-    summarize(t, "ALL entries incl. recent (open trades marked to market)")
-    by_season = mature.pivot_table(index="season", columns="rule", values="ret", aggfunc="mean")[RULES]
-    print("\nMean return per entry season (does a rule win every season or just one?):")
-    print(by_season.map("{:+.0%}".format).to_string())
-    med = mature.pivot_table(index="season", columns="rule", values="ret", aggfunc="median")[RULES]
-    print("\nMedian return per entry season:")
-    print(med.map("{:+.0%}".format).to_string())
+        summarize(m6[m6.status == st], f"6-month, {st} only", RULES6)
+    for title, m, rules in (("6-month", m6, RULES6), ("12-month", m12, RULES12)):
+        print(f"\nMedian return per entry season, {title} (does a rule win every season or just one?):")
+        print(m.pivot_table(index="season", columns="rule", values="ret", aggfunc="median")[rules].map("{:+.0%}".format).to_string())

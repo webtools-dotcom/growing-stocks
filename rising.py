@@ -114,10 +114,10 @@ def explain(row, sales_base=None, profit_base=None):
     return dict(label=label, gates=gates, next=nxt)
 
 
-# Exit rule, re-tested by exit_backtest.py on NSE-verified prices (174 trades, Dec 2024 - Dec 2025 entries):
-# a 20% stop + a review at 6 months caps the worst trade at -34% (plain 6m hold: -49%) but costs return
-# (median +1% vs +7%). Selling when growth breaks did best (median +11%) but over only five seasons, so for now
-# it stays a WARN on positions, not an exit; revisit as seasons accumulate.
+# Exit rule, exit_backtest.py on NSE-verified prices (209 trades, every season since mid-2023, all rules capped at
+# 6 months so they compare like for like): a 20% stop costs ~2.5 pts of mean return (+5.6% vs +8.2% for a plain
+# 6-month hold) but cuts the worst trade from -50% to -34%: insurance for a small account. Selling when growth
+# breaks adds nothing at the same horizon (+7.1%, worst -54%), so it is a WARN on positions, not an exit.
 STOP_PCT = .20
 REVIEW_DAYS = 182  # calendar days, ~126 trading days
 
