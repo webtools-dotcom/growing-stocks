@@ -229,7 +229,7 @@ def gate_path_html(e):
         for t in g["tests"]:
             fill, tick = _bar_pos(t)
             if g["passed"] is None:  # the run-up gate splits, it doesn't pass/fail
-                need = f"leader above {fmt_val(t['need'], t['fmt'])}"
+                need = f"{'too hot' if 'hot' in t['name'] else 'leader'} above {fmt_val(t['need'], t['fmt'])}"
             elif t["need"] is None or pd.isna(t["need"]):
                 need = ""
             elif t["fmt"] == "n":
@@ -237,7 +237,7 @@ def gate_path_html(e):
             else:
                 need = f"needs &gt;{fmt_val(t['need'], t['fmt'])}"
             ok = "info" if g["passed"] is None else "pass" if t["passed"] else "fail"
-            rows.append(f'<div class="gt"><div class="gn" title="{t["hint"]}">{t["name"]}</div>'
+            rows.append(f'<div class="gt"><div class="gn" title="{_esc(t["hint"])}">{t["name"]}</div>'
                         f'<div class="gb"><div class="gf {ok}" style="width:{fill:.0f}%"></div>'
                         f'<div class="gk" style="left:{tick:.0f}%"></div></div>'
                         f'<div class="gv"><b class="{ok}">{fmt_val(t["value"], t["fmt"])}</b> <span>{need}</span></div></div>')
@@ -370,7 +370,7 @@ def verdict_card_html(v, rules=None):
 
 def sandbox_compare(base, mine, h=300):
     """Median 6-month return per label: current rules vs your rules (averaged over seasons), with sample sizes."""
-    labels = ["LEADER", "EMERGING", "WAIT", "everything else"]
+    labels = ["LEADER", "EMERGING", "WAIT", "HOT", "everything else"]
     agg = lambda d: d.groupby("status").agg(median=("median", "mean"), n=("n", "mean")).reindex(labels)
     a, b = agg(base), agg(mine)
     fig = go.Figure([

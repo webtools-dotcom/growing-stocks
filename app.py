@@ -236,6 +236,15 @@ def sec(title, right=""):
     st.markdown(f'<div class="sec">{title}<span>{right}</span></div>', unsafe_allow_html=True)
 
 
+def tidy_about(t):
+    """Screener's description is stored cut at 600 characters: end it at the last full sentence, else a whole word."""
+    t = (t or "").strip()
+    if len(t) < 590 or t.endswith("."):
+        return t
+    cut = t.rfind(". ")
+    return t[:cut + 1] if cut > 200 else t[:t.rfind(" ")].rstrip(",;:") + "…"
+
+
 def show(htm):
     st.markdown(htm, unsafe_allow_html=True)
 
@@ -438,12 +447,9 @@ def growth_story(fd):
                 st.plotly_chart(viz.order_wins(orders["wins"]), width="stretch", config=PLOT)
 
     # revenue & profit with the yoy growth printed on every bar
-    h1, h2 = st.columns([4, 1])
-    with h2:
-        mode = st.segmented_control("view", ["quarterly", "annual"], default="quarterly", key=f"rp_{fd['symbol']}",
-                                    label_visibility="collapsed") or "quarterly"
-    with h1:
-        sec("revenue & profit", "₹ crore · label = growth vs a year earlier")
+    sec("revenue & profit", "₹ crore · label = growth vs a year earlier")
+    mode = st.segmented_control("view", ["quarterly", "annual"], default="quarterly", key=f"rp_{fd['symbol']}",
+                                label_visibility="collapsed") or "quarterly"
     src = T.get("quarters") if mode == "quarterly" else T.get("annual")
     sales, prof = _r(src, "Sales"), _r(src, "Net Profit")
     if sales is not None:
@@ -888,7 +894,7 @@ with t_stock:
             c1, c2 = st.columns([2, 3], gap="large")
             with c1:
                 show(f'<div class="meta">{esc(vd["sector"])}</div>')
-                show(f'<p style="margin:.2rem 0 .5rem">{esc(fd.get("about") or "no description on Screener")}</p>')
+                show(f'<p style="margin:.2rem 0 .5rem">{esc(tidy_about(fd.get("about")) or "no description on Screener")}</p>')
                 ol = vd["oil_link"]
                 show(f'<div class="nxi {"down" if ol == "high" else "watch" if ol == "medium" else "up"}" style="display:inline-block">'
                      f'oil-price link: <b>{ol}</b><span>how much crude prices move its costs or demand</span></div>')
@@ -1114,7 +1120,7 @@ with t_hist:
         sec("does it work? backtest", "median 6-month return of each label vs every other stock · bought at each results season")
         st.plotly_chart(viz.scoreboard(rows), width="stretch", config=PLOT)
         show('<div class="note">tall amber/green bars above the grey "everything else" bar = the labels picked better than the market. '
-             'small sample (2 years, mostly rising) — the live record below is the real test.</div>')
+             '3 years (Jun 2023 – May 2026): a rally, the 2024–25 fall and the recovery. still one cycle — the live record below is the real test.</div>')
 
     # ---- rules sandbox: change any threshold, see today's board and the backtest re-run instantly
     if rising.SEASONS_FILE.exists():
@@ -1155,7 +1161,7 @@ with t_hist:
             agg = mine_bt.groupby("status").agg(n=("n", "mean"), med=("median", "mean"), hit=("hit", "mean"), p10=("p10", "mean"))
             show(table([dict(l=status(l) if l in STATUS_C else '<span class="dim">everything else</span>',
                              n=f"{r.n:.0f}", m=pct(r.med), h=f"{r.hit:.0%}", w=pct(r.p10))
-                        for l, r in agg.reindex(["LEADER", "EMERGING", "WAIT", "everything else"]).dropna().iterrows()],
+                        for l, r in agg.reindex(["LEADER", "EMERGING", "WAIT", "HOT", "everything else"]).dropna().iterrows()],
                        [("l", "your rules"), ("n", "stocks/season"), ("m", "median 6m"), ("h", "% up"), ("w", "worst 10%")],
                        numeric={"n", "m", "h", "w"}))
             small = agg.loc[[x for x in ("LEADER", "EMERGING") if x in agg.index], "n"].min() if len(agg) else 0
