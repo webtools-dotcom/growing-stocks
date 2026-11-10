@@ -78,11 +78,17 @@ assert freshness(wed, {"ok": False, "checked_at": "2026-11-05 20:00", "error": "
 print("freshness banner ok")
 
 # a fresh "update running" marker must read as running (a timezone slip once made every marker look hours old)
+import os  # noqa: E402
+
 import rising  # noqa: E402
 
-_had = rising.RUNNING.exists()
-rising.RUNNING.touch()
-assert rising.update_running()
-if not _had:
+_had = rising.RUNNING.read_text() if rising.RUNNING.exists() else None
+rising.RUNNING.write_text(str(os.getpid()))
+assert rising.update_running()                  # a live update
+rising.RUNNING.write_text("999999")
+assert not rising.update_running()              # a marker left by a crashed update (process gone)
+if _had is None:
     rising.RUNNING.unlink()
+else:
+    rising.RUNNING.write_text(_had)
 print("update marker ok")

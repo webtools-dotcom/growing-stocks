@@ -313,12 +313,33 @@ STATE = DATA / "sync_state.json"
 RUNNING = DATA / "update.running"  # exists while an update runs; the app follows its log (data/update.log)
 
 
-def update_running():
-    """True while an update is in progress (a marker older than an hour is a crashed run, ignored)."""
+def _alive(pid):
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return code.value == 259  # STILL_ACTIVE
     try:
-        return time.time() - RUNNING.stat().st_mtime < 3600  # not pd.Timestamp.now().timestamp(): that reads local time as UTC
+        os.kill(pid, 0)
+        return True
     except OSError:
         return False
+
+
+def update_running():
+    """True while an update is in progress. The marker holds the update's process id, so a run killed by a crash or
+    power cut (marker left behind) reads as not running; anything older than an hour is ignored too."""
+    try:
+        fresh = time.time() - RUNNING.stat().st_mtime < 3600  # not pd.Timestamp.now().timestamp(): reads local time as UTC
+        pid = int(RUNNING.read_text().strip() or 0)
+    except (OSError, ValueError):
+        return False
+    return fresh and (not pid or _alive(pid))
 PUBLISH_HOUR = 19  # NSE's end-of-day file is normally out by ~7 pm IST
 
 
