@@ -76,3 +76,13 @@ assert freshness(wed, ok, T("2026-11-06 19:30"))[0] == "stale"                  
 assert freshness("2026-11-06", {"ok": True, "checked_at": "2026-11-06 20:00"}, T("2026-11-08 10:00"))[0] == "ok"  # weekend
 assert freshness(wed, {"ok": False, "checked_at": "2026-11-05 20:00", "error": "x"}, T("2026-11-05 21:00"))[0] == "failed"
 print("freshness banner ok")
+
+# a fresh "update running" marker must read as running (a timezone slip once made every marker look hours old)
+import rising  # noqa: E402
+
+_had = rising.RUNNING.exists()
+rising.RUNNING.touch()
+assert rising.update_running()
+if not _had:
+    rising.RUNNING.unlink()
+print("update marker ok")

@@ -9,16 +9,15 @@ Usage:  python growth_screen.py backtest
 import sys
 from pathlib import Path
 
-import duckdb
 import pandas as pd
 
-from config import DB
+from config import open_db
 from data_sync import adjust_prices
 LAG_DAYS = 60      # results assumed public 60d after quarter end (SEBI max: 45d, Q4: 60d)
 HOLD = 126         # ~6 months of trading days
 TOP = 10
 
-con = duckdb.connect(str(DB), read_only=True)
+con = open_db()
 inst = con.execute("select isin, symbol, company_name, sector, market_cap_cr from instruments").df()
 qr = con.execute("""select isin, quarter_end, sales_cr, op_profit_cr, opm_pct, net_profit_cr
                     from quarterly_results where quarter_end >= '2022-06-30'""").df()

@@ -17,10 +17,9 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
-import duckdb
 import pandas as pd
 
-from config import DATA, DB, nse_session
+from config import DATA, nse_session, open_db
 
 SCHEMA = """
 create table if not exists instruments (isin varchar primary key, symbol varchar, company_name varchar,
@@ -56,7 +55,7 @@ def adjust_prices(close):
 
 
 def connect():
-    con = duckdb.connect(str(DB))
+    con = open_db(read_only=False)
     con.execute(SCHEMA)
     return con
 

@@ -11,13 +11,14 @@ Usage:
   python rising.py scan     # scan only, from cached data
 """
 import io
+import os
 import sys
+import time
 from datetime import date, timedelta
-import duckdb
 import pandas as pd
 
 import settings
-from config import DATA, DB, nse_session
+from config import DATA, nse_session, open_db
 from safeio import read_json, save_csv, save_json, save_text
 
 BOARD, HISTORY = DATA / "rising_latest.csv", DATA / "rising_history.csv"
@@ -309,6 +310,15 @@ def industries():
 
 
 STATE = DATA / "sync_state.json"
+RUNNING = DATA / "update.running"  # exists while an update runs; the app follows its log (data/update.log)
+
+
+def update_running():
+    """True while an update is in progress (a marker older than an hour is a crashed run, ignored)."""
+    try:
+        return time.time() - RUNNING.stat().st_mtime < 3600  # not pd.Timestamp.now().timestamp(): that reads local time as UTC
+    except OSError:
+        return False
 PUBLISH_HOUR = 19  # NSE's end-of-day file is normally out by ~7 pm IST
 
 
@@ -335,12 +345,15 @@ def freshness(asof, state, now):
 def update():
     """Run the whole daily update and record its outcome (data/sync_state.json) for the app's freshness banner."""
     started = pd.Timestamp.now()
+    RUNNING.write_text(str(os.getpid()))
     try:
         out = _update()
     except Exception as e:
         save_json(STATE, dict(checked_at=str(started), ok=False, error=f"{type(e).__name__}: {e}"[:300]))
         raise
-    con = duckdb.connect(str(DB), read_only=True)
+    finally:
+        RUNNING.unlink(missing_ok=True)
+    con = open_db()
     latest = con.execute("select max(trade_date) from daily_market").fetchone()[0]
     con.close()
     save_json(STATE, dict(checked_at=str(started), ok=True, latest=str(latest)))
@@ -353,7 +366,7 @@ def _update():
     print("1/3 NSE end-of-day prices + filings...")
     data_sync.update()
     print("2/3 Screener: fundamentals for new results / unseen companies...")
-    con = duckdb.connect(str(DB), read_only=True)
+    con = open_db()
     # liquid companies with no result in the DB for ~2 quarters (all of them on a fresh install)
     have_recent = {r[0] for r in con.execute("""select i.symbol from quarterly_results q join instruments i using (isin)
                                                 group by 1 having max(q.quarter_end) >= current_date - 200""").fetchall()}
@@ -399,7 +412,7 @@ def _update():
     watch = (DATA / "watchlist.txt").read_text().split() if (DATA / "watchlist.txt").exists() else []
     if held or watch:  # bad-news check: red-flag filings + negative headlines, no AI tokens
         from brief import alerts
-        con = duckdb.connect(str(DB), read_only=True)
+        con = open_db()
         names = dict(con.execute("select symbol, company_name from instruments").fetchall())
         con.close()
         try:  # network extras after the scan must never mark a good update as failed
@@ -468,7 +481,7 @@ def notify_changes(out, held, watch, found):
     msgs = []
     pos = DATA / "positions.csv"
     if held and pos.exists():
-        con = duckdb.connect(str(DB), read_only=True)
+        con = open_db()
         for p in pd.read_csv(pos).itertuples():
             row = con.execute("""select close, trade_date from daily_market join instruments using (isin) where symbol = ?
                                  order by trade_date desc limit 1""", [p.symbol]).fetchone()

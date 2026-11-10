@@ -14,7 +14,7 @@ import brief  # filings-grounded LLM brief
 import fundamentals  # full financials + growth checklist
 import rising  # exit rule + alert logic (shared with backtests)
 import settings  # API keys in the OS keychain
-from config import DATA, DB, HERE
+from config import DATA, HERE, open_db
 from safeio import read_json, save_csv, save_json, save_text
 from data_sync import adjust_prices
 import insights  # trap scores, capacity bridge, order book, valuation, smart money
@@ -119,7 +119,7 @@ label p {{ font-size: .74rem !important; color: {C['dim']} !important; }}
 def q(sql, params=None):
     """Short-lived read-only connection: never hold the lock the EOD sync needs."""
     try:
-        con = duckdb.connect(str(DB), read_only=True)
+        con = open_db(wait=5)  # brief wait: the page must stay responsive while an update writes
         try:
             return con.execute(sql, params or []).df()
         finally:
@@ -544,15 +544,39 @@ def growth_story(fd):
 b = board()
 
 
+UPDATE_LOG = DATA / "update.log"
+
+
 def run_update():
+    """Start the update as its own process writing to data/update.log, then follow it. The page only reads the log,
+    so reloading or closing the page can't break the update (a page-bound pipe did: OSError 22 on Windows)."""
+    if not rising.update_running():
+        import time
+        with open(UPDATE_LOG, "w", encoding="utf-8") as log:
+            p = subprocess.Popen([sys.executable, str(HERE / "rising.py"), "update"], cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
+                                 env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        while p.poll() is None and not rising.update_running():  # wait for the update to mark itself running
+            time.sleep(.2)
+    follow_update()
+
+
+def follow_update():
+    import time
     with st.status("updating — prices, filings, new results, scan", expanded=True) as s:
-        p = subprocess.Popen([sys.executable, str(HERE / "rising.py"), "update"], cwd=HERE,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                             env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"})
-        for line in p.stdout:
-            if "litellm" not in line.lower():
-                s.write(line.rstrip())
-        s.update(label="done" if p.wait() == 0 else "update failed — see log above", state="complete")
+        seen = 0
+        while True:
+            running = rising.update_running()
+            lines = UPDATE_LOG.read_text(encoding="utf-8", errors="replace").splitlines() if UPDATE_LOG.exists() else []
+            for line in lines[seen:]:
+                if line.strip() and "litellm" not in line.lower():
+                    s.write(line)
+            seen = len(lines)
+            if not running:
+                break
+            time.sleep(1)
+        ok = read_json(DATA / "sync_state.json", {}).get("ok", False)
+        s.update(label="done" if ok else "update failed — see log above", state="complete" if ok else "error")
     st.cache_data.clear()
     st.rerun()
 
@@ -610,8 +634,9 @@ cnt = b.status.value_counts()
 counts = " · ".join(f'{status(s)} <b>{int(cnt.get(s, 0))}</b>' for s in STATUSES)
 left.markdown(f'<div class="bar"><div class="brand">RISING<span class="dim"> // nse growth terminal</span></div>'
               f'<div class="meta">data {asof:%a %d %b %Y} &nbsp;·&nbsp; {counts}</div></div>', unsafe_allow_html=True)
-if right.button("update data", width="stretch", help="prices + NSE filings + new results + rescan (≈1–10 min)"):
-    run_update()
+if right.button("update data", width="stretch", help="prices + NSE filings + new results + rescan (≈1–10 min)",
+                disabled=rising.update_running()) or rising.update_running():
+    run_update()  # also re-attaches to an update that is already running (page reloaded mid-update)
 show('<div class="legend">leader = growing + already ran 80–150% · hot = ran &gt;150%, not a buy · emerging = growth accelerating, price confirmed · '
      'wait = watch only, buy above trigger · exit = −20% stop or 6-month review · research tool, not advice</div>')
 

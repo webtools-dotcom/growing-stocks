@@ -8,7 +8,6 @@ list is today's listings (companies delisted since are missing), and market cap 
 Needs price history from 2022: python data_sync.py backfill 1650"""
 from pathlib import Path
 
-import duckdb
 import numpy as np
 import pandas as pd
 
@@ -18,7 +17,7 @@ import growth_screen as g
 OUT = ROOT / "data" / "research_panel.pkl"
 
 # full-depth quarterly history (growth_screen trims to 2022+), Screener overrides DB
-con = duckdb.connect(str(g.DB), read_only=True)
+con = g.open_db()
 qr = con.execute("select isin, quarter_end, sales_cr, op_profit_cr, opm_pct, net_profit_cr from quarterly_results").df()
 dm = con.execute("select isin, trade_date, delivery_pct, volume from daily_market").df()
 mcap_now = con.execute("select isin, market_cap_cr from instruments").df().set_index("isin").market_cap_cr

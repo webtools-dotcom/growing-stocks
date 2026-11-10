@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import requests
 
-from config import DATA, DB, nse_session
+from config import DATA, nse_session, open_db
 from safeio import read_json, save_json
 
 BRIEFS = DATA / "briefs"
@@ -170,11 +170,10 @@ def _public_checks(symbol, f):
     """[P] measured facts from public data (no AI): oil/export/defence words, panic-day behaviour, sector peers,
     safety radar and the rule-based verdicts — evidence for the model's own verdicts."""
     try:
-        import duckdb
         import insights
         import rising
         from data_sync import adjust_prices
-        con = duckdb.connect(str(DB), read_only=True)
+        con = open_db()
         try:
             px = con.execute("""select trade_date, close, high, low, volume from daily_market join instruments using (isin)
                                 where symbol = ? order by trade_date""", [symbol]).df()
@@ -195,9 +194,8 @@ def _public_checks(symbol, f):
 
 
 def _price_line(symbol):
-    import duckdb
     from data_sync import adjust_prices
-    con = duckdb.connect(str(DB), read_only=True)
+    con = open_db()
     try:
         p = con.execute("""select trade_date, close from daily_market join instruments using (isin) where symbol = ?
                            order by trade_date""", [symbol]).df()
