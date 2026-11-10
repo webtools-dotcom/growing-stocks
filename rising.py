@@ -34,8 +34,8 @@ RULES = dict(
     near_high=.85,    # trend: price at least 85% of its 52-week high (within 15%)
     wait_floor=.60,   # WAIT only if price is still at least 60% of its high
     run_up=.80,       # 1-year rise that splits LEADER (already ran) from EMERGING (not yet)
-    too_hot=1.50,     # leaders already up 150%+ in a year: 36-month backtest (Jun 2023 - May 2026) showed these hit the
-                      # -20% stop far more often; capping LEADER here lifted it from +4.9% to +8.2% vs the typical stock
+    too_hot=1.50,     # research.py, Jun 2023 - Apr 2026: with the same growth + trend, stocks up >150% hit the -20% stop
+                      # 61% of the time vs 29% for those up 80-150%, and did worse in every period -> HOT, not LEADER
 )
 
 
@@ -114,10 +114,10 @@ def explain(row, sales_base=None, profit_base=None):
     return dict(label=label, gates=gates, next=nxt)
 
 
-# Exit rule chosen by exit_backtest.py (Sep-2025 + Dec-2025 entry seasons, 90 trades, split-adjusted prices):
-# a 20% stop from entry + a review at 6 months kept most of the return (median +16% vs +17% for
-# plain 6m hold) while cutting the worst trade from -45% to -24%. Trailing stops and 50/200-DMA
-# exits did worse. "Growth broke" did not improve results, so it is a warning, not an exit.
+# Exit rule, re-tested by exit_backtest.py on NSE-verified prices (174 trades, Dec 2024 - Dec 2025 entries):
+# a 20% stop + a review at 6 months caps the worst trade at -34% (plain 6m hold: -49%) but costs return
+# (median +1% vs +7%). Selling when growth breaks did best (median +11%) but over only five seasons, so for now
+# it stays a WARN on positions, not an exit; revisit as seasons accumulate.
 STOP_PCT = .20
 REVIEW_DAYS = 182  # calendar days, ~126 trading days
 
@@ -233,9 +233,9 @@ def scan():
     f["trigger"] = pd.concat([f.dma200, .85 * f.high52], axis=1).max(axis=1).where(f.status == "WAIT")
 
     b = f[f.status.notna()].copy()
-    # steadiness score (0-100) orders stocks within a label. 36-month backtest, top 15 growers a month: ranking by the
-    # biggest sales/profit jumps did no better than random (+5% vs the typical stock, 34% hit a -20% stop); ranking by
-    # steadiness did +10% with 20% stopped out, and held in both the 2024-25 fall and the recovery. Each part is a
+    # steadiness score (0-100) orders stocks within a label. research.py, top 15 growers a month: ranking by the biggest
+    # sales/profit jumps did no better than random (+9.9% vs +10.9% over the typical stock, ~1/3 hit a -20% stop);
+    # steadiness did +14.5% with 20% stopped out, and held in both the 2024-25 fall and the recovery. Each part is a
     # rank 0..25 among board stocks; kept separately so the app can show the breakdown.
     rk = lambda s: 25 * s.rank(pct=True)
     b["s_size"], b["s_calm"] = rk(b.market_cap_cr), rk(-b.vol60)

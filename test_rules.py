@@ -92,3 +92,24 @@ if _had is None:
 else:
     rising.RUNNING.write_text(_had)
 print("update marker ok")
+
+# bad-day detector: a day where many stocks spike and snap back is flagged; a real market-wide fall is not
+import duckdb  # noqa: E402
+
+from data_sync import suspect_days  # noqa: E402
+
+_c = duckdb.connect()
+_d = pd.bdate_range("2026-01-05", periods=6)
+_rows = []
+for k in range(50):
+    for j, day in enumerate(_d):
+        px_ = 100.0
+        if j == 2 and k < 10:
+            px_ = 20.0                      # day 3: 20% of stocks show a wrong price, then snap back
+        if j >= 4:
+            px_ = 80.0                      # day 5 on: everything really falls 20% and stays down
+        _rows.append((f"I{k}", day.date(), px_))
+_c.execute("create table daily_market (isin varchar, trade_date date, close double)")
+_c.executemany("insert into daily_market values (?, ?, ?)", _rows)
+assert suspect_days(_c) == [_d[2].date()], suspect_days(_c)
+print("bad-day detector ok")

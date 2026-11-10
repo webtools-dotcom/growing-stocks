@@ -299,6 +299,8 @@ def free_snapshot(f, symbol, px, universe, industry, sub_industry, traps):
     """Verdicts for the company snapshot from public data + our own scan. Same keys the card expects:
     business / sector_outlook / war_risk / checks / overall -> [verdict, reason], plus oil_link, sector, sources."""
     import fundamentals
+    # industry lists leave gaps (NaN): treat anything that isn't text as unknown
+    industry, sub_industry = (x if isinstance(x, str) else "" for x in (industry, sub_industry))
     text = " ".join(filter(None, [f.get("about", ""), f.get("key_points", "")])).lower()
     ind = " ".join(filter(None, [industry or "", sub_industry or ""])).lower()
     out = dict(sector=" / ".join(filter(None, [industry, sub_industry])) or "unclassified")

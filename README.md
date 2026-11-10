@@ -172,8 +172,8 @@ rules sandbox all read it, so what you are shown can never drift from what actua
 
 ## The evidence
 
-All numbers below come from a **point-in-time study of 36 monthly entry dates (June 2023 – May 2026)**, covering
-a strong rally (the typical stock +16% over six months), the 2024–25 small-cap fall, and the recovery. Each month
+All numbers below come from a **point-in-time study of 35 monthly entry dates (June 2023 – April 2026)**, covering
+a strong rally (the typical stock +15% over six months), the 2024–25 small-cap fall, and the recovery. Each month
 uses only results public by then (60-day lag) and prices up to that day. Prices are split-adjusted, and one-day
 bad prints are removed.
 
@@ -181,35 +181,45 @@ bad prints are removed.
 
 | Label | Median 6-month return | Picks that rose |
 |---|---:|---:|
-| leader | **+14.1%** | 62% |
-| emerging | **+10.3%** | 71% |
-| hot | +7.3% | 68% (worst 10%: −12% or lower) |
-| wait | +0.7% | 55% |
-| every other profitable, liquid stock | +4.0% | 55% |
+| leader | **+12.9%** | 68% |
+| emerging | **+11.3%** | 70% |
+| hot | +4.7% | 64% (worst 10%: −10% or lower) |
+| wait | +0.5% | 52% |
+| every other profitable, liquid stock | +2.2% | 53% |
 
 **Ordering — top 15 growers each month, return in excess of the typical stock:**
 
 | Ranking method | Excess return | Picks that rose | Hit the −20% stop | Months it beat the market |
 |---|---:|---:|---:|---:|
-| **Steadiness score** (current) | **+9.9%** | **64%** | **20%** | **86%** |
-| Fastest sales and profit growth (previous) | +5.2% | 55% | 34% | 59% |
-| Random 15 growers (average of 50 draws) | +5.9% | 55% | 32% | 65% |
+| **Steadiness score** (current) | **+14.5%** | **73%** | **20%** | **88%** |
+| Fastest sales and profit growth (previous) | +9.9% | 65% | 32% | 69% |
+| Random 15 growers (average of 50 draws) | +10.9% | 65% | 30% | 71% |
 
 Two findings changed the app:
 
 1. **Ranking by the biggest growth numbers did no better than chance.** Huge jumps are often one-offs or low-base
-   effects. Steadiness nearly doubled the edge and cut stop-outs from about a third to a fifth, and it held in both
+   effects. Steadiness lifted the edge by about half and cut stop-outs from about a third to a fifth, and it held in both
    the falling and the recovering market.
-2. **Leaders that had already run more than 150% were the trap.** Capping LEADER there lifted its excess return
-   from +4.9% to +8.2% and cut stop-outs from 40% to 32%. They now carry their own **hot** label instead of
-   disappearing silently.
+2. **Leaders that had already run more than 150% were the trap.** With the same growth and trend, they hit the
+   −20% stop 61% of the time against 29% for leaders up 80–150%, and returned +8.5% above the typical stock
+   against +16.2% — worse in every period. They now carry their own **hot** label instead of counting as leaders.
 
 Ideas that were tested and **dropped** because they did not survive the longer history: excluding growth spikes
 above 100%, a hard volatility filter, a market-breadth regime switch, and momentum as a ranking factor (it worked
 in rising markets and lost money in the 2024–25 fall).
 
-**Exit rule:** a 20% stop plus a 6-month review kept almost all of the return of a plain 6-month hold while
-cutting the worst trade from about −45% to about −24%. Trailing stops and moving-average exits did worse.
+**Exit rule** (`exit_backtest.py`, 174 completed trades, entries Dec 2024 – Dec 2025):
+
+| Exit | Mean | Median | Worst trade |
+|---|---:|---:|---:|
+| Hold six months | +11.4% | +7.0% | −48.5% |
+| **−20% stop, review at six months** (current) | +9.6% | +1.0% | **−34.3%** |
+| Sell when growth breaks | +19.5% | +10.6% | −41.3% |
+| Growth break or −20% stop | +15.0% | +3.7% | −34.3% |
+
+The stop is insurance: it caps the worst loss but gives up some return. Selling when quarterly growth breaks did best
+in this test; with only five entry seasons it is shown as a warning on your positions rather than an automatic exit,
+and is the leading candidate for the next version of the rule.
 
 ---
 
@@ -339,7 +349,7 @@ flowchart TD
 | `insights.py` | Safety radar, capacity bridge, order book, margin band, P/E history, insider trades, rule-based verdicts |
 | `brief.py` | Optional AI brief and daily red-flag alerts |
 | `viz.py` | Every chart builder and the colour palette |
-| `research.py` | The 36-month study behind the labels and the steadiness score |
+| `research.py` | The 3-year study behind the labels and the steadiness score |
 | `exit_backtest.py` | The exit-rule backtest |
 | `test_rules.py` | Self-checks for the rules, the explainer, price adjustment, the freshness banner and update tracking |
 | `config.py` / `safeio.py` / `settings.py` | Paths and database access, crash-safe file I/O, AI provider and key storage |
@@ -367,7 +377,7 @@ python exit_backtest.py
 python test_rules.py
 ```
 
-`research.py` builds the point-in-time panel (36 monthly entries, about 30 candidate signals, the next six months'
+`research.py` builds the point-in-time panel (35 monthly entries, about 30 candidate signals, the next six months'
 return and worst drawdown for every stock), then compares rule sets and ranking methods across three separate
 periods. The rules sandbox in the app re-tests any threshold you like in seconds.
 
@@ -379,6 +389,8 @@ Honest caveats, so you can weigh the evidence properly:
 
 - **Survivorship bias.** The study uses today's listings, so companies delisted since 2023 are missing. That
   flatters every result a little.
+- **Prices are checked against NSE's official files.** Every stored day is re-verified against NSE's archive, and
+  days that look wrong are re-downloaded automatically; holidays with invented prices from an old import were removed.
 - **Three years is one market cycle.** The period includes a rally, a fall and a recovery, but not a long bear
   market.
 - **Historic market cap is estimated** from today's, scaled by price, so share issuance in between is ignored.

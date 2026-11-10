@@ -171,13 +171,22 @@ for name, kw in [("old rules (no 150% cap)", {}), ("no spike", dict(spike=1.0)),
 print("\n=== LABELS: 6m return in excess of the typical stock (A/B/C = the three periods) ===")
 print(pd.DataFrame(rows).to_string(index=False, formatters={c: fmt for c in ["med_ex", "hit", "stop20", "beat", "A", "B", "C"]}))
 
+# ---- leaders vs stocks that already ran >150% (the HOT label), same growth and trend gates
+gg = (P.streak >= RULES["streak"]) & (P.sales_yoy > RULES["sales_yoy"]) & (P.pat_yoy > RULES["pat_yoy"]) & (P.seq_ups >= RULES["seq_ups"])
+tt = P.above_200 & (P.off_high > RULES["near_high"])
+print("\n=== LEADER (1y run 80-150%) vs HOT (>150%), same growth + trend gates ===")
+print(pd.DataFrame([dict(bucket=k, **ev(P[m])) for k, m in [
+    ("LEADER 80-150%", gg & tt & (P.ret1y >= RULES["run_up"]) & (P.ret1y < RULES["too_hot"])),
+    ("HOT >150%", gg & tt & (P.ret1y >= RULES["too_hot"]))]]).to_string(
+    index=False, formatters={c: fmt for c in ["med_ex", "hit", "stop20", "beat", "A", "B", "C"]}))
+
 # ---- ranking inside the board
 R_ = lambda s: s.groupby(P.on).rank(pct=True)
 growth = (P.streak >= 2) & (P.sales_yoy > .2) & (P.pat_yoy > .25) & (P.seq_ups >= 2)
 P["spike"] = P.sales_yoy > 1.0
 G = P[growth].copy()
 g = lambda c: G[c].groupby(G.on).rank(pct=True)
-G["score_today"] = g("sales_yoy") + g("pat_yoy") + .5 * g("opm_chg") + .5 * g("mom3")      # the board score before Nov 2026 (minus lumpy)
+G["score_old"] = g("sales_yoy") + g("pat_yoy") + .5 * g("opm_chg") + .5 * g("mom3")      # the board score before Nov 2026 (minus lumpy)
 G["score_steady"] = (g("mcap") + (1 - g("vol60")) + G.deliv_chg.groupby(G.on).rank(pct=True).fillna(.5) + g("opm_chg")) / 4
 G["score_steady_rs"] = (G.score_steady * 4 + g("rs6")) / 5
 print("\n=== RANKING growers (growth gate, no spikes): top 15 per month by each score ===")

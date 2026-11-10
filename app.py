@@ -211,6 +211,8 @@ def esc(x):
 def pct(x, d=0):
     if pd.isna(x):
         return '<span class="dim">–</span>'
+    if abs(x) == float("inf"):  # growth from a base of exactly zero: no percentage exists
+        return '<span class="up" title="a year ago this was zero, so there is no growth percentage">from 0</span>'
     return f'<span class="{"up" if x > 0 else "dn" if x < 0 else "dim"}">{x * 100:+.{d}f}%</span>'
 
 
@@ -234,6 +236,12 @@ def table(rows, cols, numeric=()):
 
 def sec(title, right=""):
     st.markdown(f'<div class="sec">{title}<span>{right}</span></div>', unsafe_allow_html=True)
+
+
+def clip(t, n):
+    """Shorten to n characters at a word boundary, with an ellipsis when cut."""
+    t = " ".join(str(t or "").split())
+    return t if len(t) <= n else t[:t.rfind(" ", 0, n)].rstrip(",;:-") + "…"
 
 
 def tidy_about(t):
@@ -278,7 +286,7 @@ def mini(title, fig, col, h=230):
     col.plotly_chart(fig, width="stretch", config=PLOT)
 
 
-RANGES = {"1M": 31, "3M": 92, "6M": 183, "1Y": 366, "2Y": 731, "3Y": 1100}
+RANGES = {"1M": 21, "3M": 63, "6M": 126, "1Y": 250, "2Y": 500, "3Y": 750}  # trading sessions, as the scan counts them
 
 
 def price_chart(sym, r):
@@ -289,19 +297,18 @@ def price_chart(sym, r):
         return
     px_ = px_.assign(trade_date=pd.to_datetime(px_.trade_date), close=adjust_prices(px_.close)).dropna(subset=["close"])
     px_["dma200"] = px_.close.rolling(200, min_periods=150).mean()  # computed on full history, before slicing
-    h1, h2 = st.columns([3, 2])
-    with h2:
-        rng = st.segmented_control("range", list(RANGES), default="1Y", key=f"rng_{sym}", label_visibility="collapsed") or "1Y"
-    d = px_[px_.trade_date >= px_.trade_date.iloc[-1] - pd.Timedelta(days=RANGES[rng])]
+    head = st.container()  # the heading needs the chosen range, but sits above the buttons
+    rng = st.segmented_control("range", list(RANGES), default="1Y", key=f"rng_{sym}", label_visibility="collapsed") or "1Y"
+    d = px_.tail(RANGES[rng] + 1)  # same windows as the scan: 1Y = today vs 250 sessions ago, so the numbers agree
     last, first = d.close.iloc[-1], d.close.iloc[0]
     chg = last / first - 1
-    hi52 = px_[px_.trade_date >= px_.trade_date.iloc[-1] - pd.Timedelta(days=365)].close.max()
+    hi52 = px_.tail(251).close.max()
     dma = px_.dma200.iloc[-1]
 
     trend = ("" if pd.isna(dma) else
              f' · {pct(last / dma - 1)} vs 200-day avg — <span class="{"up" if last > dma else "dn"}">'
              f'{"uptrend" if last > dma else "downtrend"}</span>')
-    with h1:
+    with head:
         sec("price", f"₹{last:,.2f} · {pct(chg, 1)} over {rng}{trend} · {pct(last / hi52 - 1)} from 52-week high")
 
     held = pos[pos.symbol == sym]
@@ -510,8 +517,8 @@ def growth_story(fd):
                         dict(k="its usual P/E", v=f"{pe.median():.0f}"),
                         dict(k="vs usual", v=(f'<span class="{"dn" if rel > .15 else "up" if rel < -.1 else "am"}">'
                                               f'{abs(rel):.0%} {"above" if rel > 0 else "below"}</span>') if pd.notna(rel) else "–"),
-                        dict(k="profit growth (3y/yr)", v=f"{g3:.0f}%" if g3 else "–"),
-                        dict(k="PEG (P/E ÷ growth)", v=f'<span class="{"up" if peg and peg < 1 else "am" if peg and peg < 2 else "dn"}">{peg:.1f}</span>' if peg else "–")],
+                        dict(k="profit growth (3y/yr)", v=f"{g3:.0f}%" if pd.notna(g3) and g3 else "–"),
+                        dict(k="PEG (P/E ÷ growth)", v=f'<span class="{"up" if peg and peg < 1 else "am" if peg and peg < 2 else "dn"}">{peg:.1f}</span>' if pd.notna(peg) and peg else "–")],
                        [("k", ""), ("v", "")], numeric={"v"}))
             show('<div class="note">PEG under 1 = paying less than its growth rate; over 2 = a lot of future growth is already in the price. '
                  '"vs usual" is green when it\'s cheaper than its own history.</div>')
@@ -938,7 +945,7 @@ with t_stock:
                     show(f'<div class="meta">score breakdown · #{rank} of {len(lab)} {r.status.lower()} · steadiness · decides the order on the board</div>')
                     st.plotly_chart(viz.score_waterfall(bs.loc[sym], rank, len(lab)), width="stretch", config=PLOT)
                     show('<div class="note">each part is a rank from 0 to 25 among all board stocks (25 = best). '
-                         'the label comes from the gates; the score only orders stocks within a label. in the 36-month '
+                         'the label comes from the gates; the score only orders stocks within a label. in the 3-year '
                          'backtest the 15 steadiest growers each month hit the −20% stop far less often than the fastest-growing.</div>')
                 hh = history()
                 hh = hh[hh.symbol == sym] if len(hh) else hh
@@ -1011,7 +1018,7 @@ with t_stock:
         fl = q("""select cast(filing_datetime as date) date, category, headline from corporate_filings
                   where symbol = ? order by filing_datetime desc limit 20""", [sym])
         sec("recent filings")
-        show(table([dict(d=f"{pd.Timestamp(x.date):%d %b}", c=esc(x.category).lower(), _wrap=esc(str(x.headline)[:140]))
+        show(table([dict(d=f"{pd.Timestamp(x.date):%d %b}", c=esc(x.category).lower(), _wrap=esc(clip(x.headline, 140)))
                     for x in fl.itertuples()], [("d", "date"), ("c", "type"), ("_wrap", "headline")]))
 
 # ---------------------------------------------------------------- compare
@@ -1059,6 +1066,7 @@ with t_sec:
     s["industry"] = s.industry.fillna("unclassified")
     g = s.groupby("industry").agg(n=("symbol", "count"), l=("status", lambda x: (x == "LEADER").sum()),
                                   e=("status", lambda x: (x == "EMERGING").sum()), w=("status", lambda x: (x == "WAIT").sum()),
+                                  h=("status", lambda x: (x == "HOT").sum()),
                                   m3=("ret3m", "median"), sy=("sales_yoy", "median"),
                                   names=("symbol", lambda x: ", ".join(x[:8]))).sort_values("n", ascending=False)
     sec("themes", "box size = how many rising companies an industry holds · colour = 3-month price move · click to zoom in")
@@ -1067,10 +1075,11 @@ with t_sec:
          'green boxes are already moving; dark ones are growing but not yet noticed.</div>')
     sec("by industry")
     show(table([dict(i=esc(i), n=r.n, l=f'<span style="color:{C["amber"]}">{r.l}</span>', e=f'<span class="up">{r.e}</span>',
-                     w=f'<span style="color:{C["blue"]}">{r.w}</span>', m3=pct(r.m3), sy=pct(r.sy), _wrap=esc(r.names))
+                     w=f'<span style="color:{C["blue"]}">{r.w}</span>', h=f'<span style="color:{STATUS_C["HOT"]}">{r.h}</span>',
+                     m3=pct(r.m3), sy=pct(r.sy), _wrap=esc(r.names))
                 for i, r in g.iterrows()],
-               [("i", "industry"), ("n", "names"), ("l", "leader"), ("e", "emerging"), ("w", "wait"), ("m3", "3m median"),
-                ("sy", "sales yoy"), ("_wrap", "names")], numeric={"n", "l", "e", "w", "m3", "sy"}))
+               [("i", "industry"), ("n", "names"), ("l", "leader"), ("e", "emerging"), ("w", "wait"), ("h", "hot"),
+                ("m3", "3m median"), ("sy", "sales yoy"), ("_wrap", "names")], numeric={"n", "l", "e", "w", "h", "m3", "sy"}))
 
 # ---------------------------------------------------------------- filings
 with t_fil:
@@ -1083,7 +1092,7 @@ with t_fil:
         fl = fl[fl.stt.notna()] if only else fl
     sec("catalyst filings", "capacity · orders · results · presentations")
     show(table([dict(d=f"{pd.Timestamp(x.date):%d %b}", sym=f"<b>{esc(x.symbol)}</b>",
-                     st=status(x.stt) if isinstance(x.stt, str) else "", c=esc(x.category).lower(), _wrap=esc(str(x.headline)[:130]))
+                     st=status(x.stt) if isinstance(x.stt, str) else "", c=esc(x.category).lower(), _wrap=esc(clip(x.headline, 130)))
                 for x in fl.head(300).itertuples()], [("d", "date"), ("sym", "symbol"), ("st", "status"), ("c", "type"), ("_wrap", "headline")]))
 
 # ---------------------------------------------------------------- watchlist
@@ -1106,8 +1115,14 @@ with t_watch:
             rows.append(dict(sym=f"<b>{esc(s_)}</b>", st=status(r.status), c=num(r.close), t=num(r.trigger),
                              g=pct(r.trigger / r.close - 1, 1) if pd.notna(r.trigger) else '<span class="dim">–</span>',
                              s=pct(r.sales_yoy), p=pct(r.pat_yoy), sig=sig))
-        else:
-            rows.append(dict(sym=f"<b>{esc(s_)}</b>", st='<span class="dim">off board</span>'))
+        else:  # not labelled: show what the full scan knows, so the row isn't blank
+            uu = universe()
+            r = uu.set_index("symbol").loc[s_] if len(uu) and s_ in set(uu.symbol) else None
+            dash = '<span class="dim">–</span>'
+            rows.append(dict(sym=f"<b>{esc(s_)}</b>", st='<span class="dim">off board</span>', t=dash, g=dash,
+                             c=num(r.close) if r is not None else dash, s=pct(r.sales_yoy) if r is not None else dash,
+                             p=pct(r.pat_yoy) if r is not None else dash,
+                             sig="" if r is not None else '<span class="dim">not scanned</span>'))
     sec("watchlist", "trigger = price to close above before buying a wait name")
     show(table(rows, [("sym", "symbol"), ("st", "status"), ("c", "close"), ("t", "trigger"), ("g", "to go"),
                       ("s", "sales"), ("p", "profit"), ("sig", "")], numeric={"c", "t", "g", "s", "p"}))
@@ -1171,10 +1186,15 @@ with t_hist:
     h = history()
     sec("live track record", "how each name did after it first appeared on the board")
     if len(h):
-        d = h[h.status != "BROKE"].groupby("symbol").agg(first=("asof", "min"), scans=("asof", "nunique"),
-                                                          c0=("close", "first"), last=("status", "last"))
-        d = d.join(bs.close).assign(ret=lambda x: x.close / x.c0 - 1).sort_values(["first", "ret"], ascending=[False, False])
-        show(table([dict(sym=f"<b>{esc(i)}</b>", f=esc(r["first"]), n=r.scans, st=status(r["last"]), c0=num(r.c0), c=num(r.close),
-                         ret=pct(r.ret, 1)) for i, r in d.iterrows()],
-                   [("sym", "symbol"), ("f", "first seen"), ("n", "scans"), ("st", "label then"), ("c0", "price then"),
-                    ("c", "now"), ("ret", "since")], numeric={"n", "c0", "c", "ret"}))
+        d = h[h.status != "BROKE"].sort_values("asof").groupby("symbol").agg(
+            first=("asof", "min"), scans=("asof", "nunique"), c0=("close", "first"), then=("status", "first"))
+        uu = universe()
+        now_px = bs.close.combine_first(uu.set_index("symbol").close) if len(uu) else bs.close  # left the board: still priced
+        now_st = bs.status.reindex(d.index).fillna("off board")
+        d = d.join(now_px.rename("close")).assign(ret=lambda x: x.close / x.c0 - 1, now=now_st)
+        d = d.sort_values(["first", "ret"], ascending=[False, False])
+        show(table([dict(sym=f"<b>{esc(i)}</b>", f=f"{pd.Timestamp(r['first']):%d %b}", n=r.scans, st=status(r["then"]),
+                         sn=status(r["now"]) if r["now"] in STATUS_C else '<span class="dim">off board</span>',
+                         c0=num(r.c0), c=num(r.close), ret=pct(r.ret, 1)) for i, r in d.iterrows()],
+                   [("sym", "symbol"), ("f", "first seen"), ("n", "scans"), ("st", "label then"), ("sn", "label now"),
+                    ("c0", "price then"), ("c", "price now"), ("ret", "since")], numeric={"n", "c0", "c", "ret"}))

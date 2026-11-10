@@ -126,14 +126,7 @@ def sync_prices(con, s, since, log=print):
     days = [d for d in days if d.weekday() < 5 and d not in have]
     added = 0
     for n, d in enumerate(days, 1):
-        b = bhavcopy(s, d)
-        if b is not None and len(b):
-            con.register("b", b)
-            con.execute("""insert or replace into daily_market
-                           select i.isin, b.trade_date, b.open, b.high, b.low, b.close, b.volume, b.delivery_qty,
-                                  b.delivery_pct, b.turnover_cr from b join instruments i using (symbol)
-                           qualify row_number() over (partition by i.symbol order by i.updated_at desc nulls last) = 1""")
-            con.unregister("b")
+        if store_day(con, s, d):
             added += 1
         if n % 50 == 0:
             log(f"prices: {n}/{len(days)} days checked, {added} trading days added")
@@ -206,12 +199,73 @@ def update(log=print):
         sync_filings(con, s, 7 if last else 30, log)
 
 
+def store_day(con, s, d):
+    """Replace one trading day with NSE's file. The file is authoritative: rows it doesn't list are removed, so
+    leftovers from an older import or a wrong-date file can't survive. -> True if NSE had the day."""
+    b = bhavcopy(s, d)
+    if b is None or not len(b):
+        return False
+    con.execute("delete from daily_market where trade_date = ?", [d])
+    con.register("b", b)
+    con.execute("""insert or replace into daily_market
+                   select i.isin, b.trade_date, b.open, b.high, b.low, b.close, b.volume, b.delivery_qty,
+                          b.delivery_pct, b.turnover_cr from b join instruments i using (symbol)
+                   qualify row_number() over (partition by i.symbol order by i.updated_at desc nulls last) = 1""")
+    con.unregister("b")
+    return True
+
+
+def refetch(since, log=print):
+    """Re-download every stored day from `since` (weekend special sessions included) so the whole history matches
+    NSE's official files. ~1 s a day."""
+    s = nse_session()
+    with connect() as con:
+        days = [r[0] for r in con.execute("select distinct trade_date from daily_market where trade_date >= ? order by 1",
+                                          [since]).fetchall()]
+    for n, d in enumerate(days, 1):
+        with connect() as con:  # one short write per day, so the app can still read during a long refetch
+            if not store_day(con, s, d):
+                con.execute("delete from daily_market where trade_date = ?", [d])
+                log(f"   {d}: no NSE file, removed")
+        if n % 100 == 0:
+            log(f"refetch: {n}/{len(days)} days")
+        time.sleep(PAUSE)
+    log(f"refetch: {len(days)} days checked against NSE")
+
+
+def suspect_days(con, share=.02):
+    """Trading days whose stored prices look like another day's or a broken import: many stocks jump >15% and
+    snap straight back the next session. On a real day this is ~0% of stocks; a wrong file shows 3-14%."""
+    p = con.execute("select isin, trade_date, close from daily_market").df().pivot(index="trade_date", columns="isin", values="close")
+    p = p.sort_index()
+    prev, nxt = p.shift(1), p.shift(-1)
+    spike = ((p / prev - 1).abs() > .15) & ((p / nxt - 1).abs() > .15) & ((nxt / prev - 1).abs() < .15)
+    frac = spike.sum(axis=1) / p.notna().sum(axis=1)
+    return [pd.Timestamp(d).date() for d in frac[frac > share].index]
+
+
+def repair(log=print):
+    """Re-download suspect days from NSE (weekend special sessions included) and replace them; a day NSE has no
+    file for is removed, since a wrong day is worse than a missing one."""
+    s = nse_session()
+    with connect() as con:
+        days = suspect_days(con)
+        for d in days:
+            ok = store_day(con, s, d)
+            if not ok:
+                con.execute("delete from daily_market where trade_date = ?", [d])
+            log(f"repaired {d}: " + ("re-downloaded from NSE" if ok else "no NSE file, removed"))
+            time.sleep(PAUSE)
+        log(f"price check: {len(days)} suspect day(s)" + (f", still suspect after repair: {suspect_days(con)}" if days else ""))
+
+
 def backfill(days, log=print):
     s = nse_session()
     with connect() as con:
         if con.execute("select count(*) from instruments").fetchone()[0] == 0:
             sync_instruments(con, s, log)
         sync_prices(con, s, date.today() - timedelta(int(days)), log)
+    repair(log)
 
 
 def import_alphasniper(log=print):
@@ -232,4 +286,5 @@ def import_alphasniper(log=print):
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "update"
     {"update": lambda: update(), "backfill": lambda: backfill(sys.argv[2] if len(sys.argv) > 2 else 1100),
+     "repair": lambda: repair(), "refetch": lambda: refetch(sys.argv[2] if len(sys.argv) > 2 else "2022-01-01"),
      "import-alphasniper": import_alphasniper}[cmd]()

@@ -111,7 +111,8 @@ def pe_chart(pe, h=260):
                    marker=dict(size=8, color=C["red"] if now > med * 1.3 else C["green"] if now < med * .85 else C["amber"]),
                    textfont=dict(color=C["text"]), showlegend=False, hoverinfo="skip")])
     fig.add_hline(y=med, line=dict(color=C["dim"], dash="dot", width=1), annotation_text=f"its usual P/E {med:.0f}",
-                  annotation_position="top left", annotation_font=dict(color=C["dim"], size=10))
+                  annotation_position="bottom left", annotation_bgcolor="#0f100d",  # readable over the line
+                  annotation_font=dict(color=C["text"], size=10))
     fig = chart_layout(fig, h).update_layout(showlegend=False, margin=dict(l=0, r=40, t=24, b=0))
     hi = pe.quantile(.98)
     fig.update_yaxes(range=[0, max(hi, now) * 1.1])
@@ -131,9 +132,9 @@ def ownership_change_bars(ch, h=260):
 
 def themes_treemap(b, h=520):
     """Industries sized by how many rising companies they hold, coloured by 3-month price momentum."""
-    d = b[b.status.isin(["LEADER", "EMERGING", "WAIT"])].copy()
+    d = b[b.status.isin(["LEADER", "EMERGING", "WAIT", "HOT"])].copy()
     d["industry"] = d.industry.fillna("unclassified")
-    d["w"] = d.status.map({"LEADER": 3, "EMERGING": 3, "WAIT": 1})
+    d["w"] = d.status.map({"LEADER": 3, "EMERGING": 3, "HOT": 3, "WAIT": 1})
     d["ret3m"] = d.ret3m.clip(-.5, 1) * 100
     d["label"] = d.symbol + "<br>" + d.status.str.lower()
     fig = go.Figure(go.Treemap(
@@ -292,13 +293,15 @@ def crowd_strips(u, me, h=520):
         v = me.get(col)
         if v is not None and pd.notna(v):
             beats = (vals < v).mean()
+            off = " →" if v > hi else " ←" if v < lo else ""  # beyond the axis: pinned to the edge, arrow says so
             fig.add_trace(go.Scatter(x=[min(max(v, lo), hi)], y=[0], mode="markers+text", showlegend=False,
                                      marker=dict(size=12, color=C["amber"], line=dict(color=C["bg"], width=1.5)),
-                                     text=[f"  {fmt_val(v, fmt)} · beats {beats:.0%}"],
+                                     text=[f"  {fmt_val(v, fmt)}{off} · beats {beats:.0%}  "],
                                      textposition="middle left" if v > lo + .75 * (hi - lo) else "middle right",
                                      textfont=dict(color=C["text"], size=10), hoverinfo="skip"), i, 1)
         fig.add_vline(x=need, row=i, col=1, line=dict(color=C["blue"], width=1, dash="dot"))
-        fig.update_xaxes(range=[lo, hi], tickformat=".0%" if fmt == "pct" else None, ticksuffix="" if fmt == "pct" else " pts",
+        pad = .03 * (hi - lo)  # room for a dot pinned at either edge
+        fig.update_xaxes(range=[lo - pad, hi + pad], tickformat=".0%" if fmt == "pct" else None, ticksuffix="" if fmt == "pct" else " pts",
                          row=i, col=1, showgrid=False, tickfont=dict(size=9), fixedrange=True)
         fig.update_yaxes(visible=False, range=[-1.6, 1.6], row=i, col=1, fixedrange=True)
     fig.update_annotations(font=dict(size=10, color=C["text"]), x=0, xanchor="left", yshift=2)
@@ -312,7 +315,7 @@ def universe_funnel(fn, h=340):
     stages = [("listed on NSE", fn["listed"]), ("results in the last 6 months", fn["recent"]),
               ("profitable · Rs 25 Cr+ quarterly sales · Rs 1 Cr+ traded a day", fn["scanned"]),
               ("growth gate: strong, consistent growth", fn["growth"]), ("+ growth accelerating", fn["accel"]),
-              ("labelled: leader / emerging / wait", sum(lab.values())),
+              ("labelled: leader / emerging / wait / hot", sum(lab.values())),
               ("buy-list: trend confirmed (leader + emerging)", lab.get("LEADER", 0) + lab.get("EMERGING", 0))]
     fig = go.Figure(go.Funnel(
         y=[s for s, _ in stages], x=[n for _, n in stages], textinfo="value+percent initial",
@@ -335,6 +338,7 @@ def label_timeline(hist, h=150):
                                hovertemplate="%{x|%d %b %Y}: %{customdata[0]} at Rs %{customdata[1]:,.1f}<extra></extra>"))
     fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=0, t=6, b=0))
     fig.update_yaxes(tickvals=[0, 1, 2, 3, 4], ticktext=["broke", "wait", "emerging", "leader", "hot"], range=[-.5, 4.5])
+    fig.update_xaxes(tickformat="%d %b")  # one line: the default two-line date label was clipped
     return fig
 
 

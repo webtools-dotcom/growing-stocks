@@ -232,7 +232,10 @@ def pick_filings(ann, days=180):
 
 
 def pdf_text(session, url):
+    import logging
+
     from pypdf import PdfReader
+    logging.getLogger("pypdf").setLevel(logging.ERROR)  # filings often hold malformed numbers; pypdf copes, just noisily
     r = session.get(url, timeout=40)
     r.raise_for_status()
     reader = PdfReader(io.BytesIO(r.content))
