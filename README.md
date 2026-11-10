@@ -143,16 +143,16 @@ The scan is a sequence of gates. A company must pass each one, using only result
 to that day.
 
 ```mermaid
-flowchart LR
-    A["~2,700 listed<br/>companies"] --> B["Recent results<br/>+ profitable, liquid<br/>(sales ≥ ₹25 Cr/qtr,<br/>₹1 Cr+ traded/day)"]
-    B --> C{"Growth<br/>2 of last 3 qtrs: sales & profit +15% YoY<br/>latest: sales +20%, profit +25%<br/>sales up QoQ in 2 of 3"}
-    C --> E{"Trend<br/>above 200-day average<br/>within 15% of 52-week high"}
-    E --> F{"Run-up<br/>1-year price rise"}
-    F -->|"< 80%"| D{"Acceleration<br/>growth faster than 2 qtrs ago<br/>or margins widening"}
-    D --> G["EMERGING"]
-    F -->|"80–150%"| H["LEADER"]
-    F -->|"> 150%"| I["HOT · not a buy"]
-    E -.->|"not confirmed yet,<br/>growth accelerating"| J["WAIT · trigger price"]
+flowchart TD
+    A["<b>~2,700 listed companies</b>"] --> B["<b>Scanned</b><br/>recent results · profitable<br/>sales ≥ ₹25 Cr a quarter · ₹1 Cr+ traded a day"]
+    B --> C{"<b>Growth</b><br/>sales & profit +15% YoY in 2 of last 3 qtrs<br/>latest qtr: sales +20%, profit +25%"}
+    C --> E{"<b>Trend</b><br/>above 200-day average<br/>within 15% of 52-week high"}
+    E -->|"not yet, but<br/>growth accelerating"| J["<b>WAIT</b><br/>watch · trigger price"]
+    E -->|confirmed| F{"<b>Run-up</b><br/>1-year price rise"}
+    F -->|"under 80%"| D{"<b>Acceleration</b><br/>growth speeding up<br/>or margins widening"}
+    F -->|"80–150%"| H["<b>LEADER</b>"]
+    F -->|"over 150%"| I["<b>HOT</b><br/>shown, not a buy"]
+    D --> G["<b>EMERGING</b>"]
 ```
 
 Within each label, stocks are ordered by a **steadiness score** (0–100), four equal parts, each a rank among board
@@ -305,7 +305,7 @@ provider — **Gemini, Anthropic, OpenAI, Groq or OpenRouter** — paste your ow
 ## Architecture
 
 ```mermaid
-flowchart TB
+flowchart TD
     subgraph sources["Public sources"]
         NSE["NSE archives & APIs<br/>prices · filings · insider trades · calendar"]
         SCR["Screener.in<br/>results · balance sheet · shareholding"]
