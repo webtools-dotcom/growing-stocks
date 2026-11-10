@@ -28,13 +28,15 @@ _sq = Path(__file__).resolve().parent / "data" / "screener_q.csv"
 if _sq.exists():
     sq = pd.read_csv(_sq, parse_dates=["quarter_end"]).merge(inst[["isin", "symbol"]], on="symbol").drop(columns="symbol")
     qr = pd.concat([qr, sq[qr.columns]]).drop_duplicates(["isin", "quarter_end"], keep="last")
-px = con.execute("select isin, trade_date, close, turnover_cr from daily_market").df()
+px = con.execute("select isin, trade_date, close, turnover_cr, delivery_pct from daily_market").df()
 px["trade_date"] = pd.to_datetime(px["trade_date"])
 con.close()  # release the file so the daily sync can write
 close = px.pivot(index="trade_date", columns="isin", values="close").sort_index()
 turn = px.pivot(index="trade_date", columns="isin", values="turnover_cr").sort_index()
+deliv = px.pivot(index="trade_date", columns="isin", values="delivery_pct").sort_index()
 # NSE prices are unadjusted: fix splits, bonuses and bad prints once, here, for the scan and all backtests
 adj = adjust_prices(close)
+rets = adj.pct_change(fill_method=None)
 
 
 def features(asof_q: pd.Timestamp, on: pd.Timestamp) -> pd.DataFrame:
@@ -67,6 +69,10 @@ def features(asof_q: pd.Timestamp, on: pd.Timestamp) -> pd.DataFrame:
         "off_high": adj.iloc[i] / hist.max(),
         "above_200": adj.iloc[i] > hist.tail(200).mean(),
         "turn_cr": turn.iloc[max(0, i - 60): i + 1].median(),
+        # calm: typical daily swing over 60 days (std of daily returns); frantic stocks hit stops far more often
+        "vol60": rets.iloc[max(0, i - 60): i + 1].std(),
+        # accumulation: delivery % (shares actually taken home, not intraday trades) last month vs the last 6 months
+        "deliv_chg": deliv.iloc[max(0, i - 20): i + 1].mean() - deliv.iloc[max(0, i - 120): i + 1].mean(),
     }), how="inner")
     f["date_idx"] = i
     # base hygiene: real business, profitable, tradable

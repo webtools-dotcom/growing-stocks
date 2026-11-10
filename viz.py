@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 
 C = dict(bg="#0f100d", line="#2a2b24", text="#d6d3c4", dim="#7f7c70", amber="#d9a54b",
          green="#93b874", blue="#7d9db6", red="#cf7462", muted="#3b3d34")
-STATUS_C = {"LEADER": C["amber"], "EMERGING": C["green"], "WAIT": C["blue"], "BROKE": C["red"]}
+STATUS_C = {"LEADER": C["amber"], "EMERGING": C["green"], "WAIT": C["blue"], "HOT": "#d4805a", "BROKE": C["red"]}
 FONT = "JetBrains Mono, monospace"
 PLOT = {"displayModeBar": False, "scrollZoom": False}
 
@@ -153,7 +153,7 @@ def themes_treemap(b, h=520):
 def scoreboard(rows, h=300):
     """Median 6-month return of each label, per results season, vs everything else."""
     df = pd.DataFrame(rows)
-    colors = {"LEADER": C["amber"], "EMERGING": C["green"], "WAIT": C["blue"], "everything else": C["muted"]}
+    colors = {"LEADER": C["amber"], "EMERGING": C["green"], "WAIT": C["blue"], "HOT": STATUS_C["HOT"], "everything else": C["muted"]}
     fig = go.Figure([go.Bar(x=g.on.astype(str), y=g["median"] * 100, name=k.lower(), marker_color=colors.get(k, C["dim"]),
                             customdata=g.n, hovertemplate="%{x}: median %{y:+.0f}% · %{customdata} stocks<extra>" + k.lower() + "</extra>")
                      for k, g in df.groupby("status", sort=False)])
@@ -251,23 +251,22 @@ def gate_path_html(e):
 
 
 def score_waterfall(row, rank, n_label, h=270):
-    """How the score that orders the board is built: each part is a rank (0..1) among board stocks."""
-    parts = [("sales growth", row["s_sales"], "rank of latest-quarter sales growth among board stocks"),
-             ("profit growth", row["s_profit"], "rank of latest-quarter profit growth among board stocks"),
-             ("margin change", row["s_margin"], "half of the rank of margin change vs a year ago"),
-             ("3-month momentum", row["s_mom"], "half of the rank of the 3-month price move"),
-             ("one-off penalty", row["s_lumpy"], "minus 1 if one quarter's sales were over 2x another's")]
+    """How the steadiness score that orders the board is built: each part is a rank (0..25) among board stocks."""
+    parts = [("size", row["s_size"], "bigger company = higher · small caps fell hardest in 2024-25"),
+             ("calm price", row["s_calm"], "smaller daily swings over 60 days = higher · frantic stocks hit stops more"),
+             ("accumulation", row["s_accum"], "delivery % last month vs last 6 months · rising = shares being taken home"),
+             ("margin change", row["s_margin"], "operating margin vs a year ago · widening = higher")]
     fig = go.Figure(go.Waterfall(
         orientation="h", y=[p[0] for p in parts] + ["score"], x=[p[1] for p in parts] + [0],
         measure=["relative"] * len(parts) + ["total"],
-        text=[f"{p[1]:+.2f}" for p in parts] + [f"{row['score']:.2f}"], textposition="outside",
-        customdata=[p[2] for p in parts] + [f"#{rank} of {n_label} in its label · best possible 3.0"],
-        hovertemplate="%{y}: %{x:.2f}<br>%{customdata}<extra></extra>",
+        text=[f"{p[1]:.0f}" for p in parts] + [f"{row['score']:.0f}"], textposition="outside",
+        customdata=[p[2] for p in parts] + [f"#{rank} of {n_label} in its label · best possible 100"],
+        hovertemplate="%{y}: %{x:.0f}<br>%{customdata}<extra></extra>",
         increasing=dict(marker=dict(color=C["green"])), decreasing=dict(marker=dict(color=C["red"])),
         totals=dict(marker=dict(color=C["amber"])), connector=dict(line=dict(color=C["line"], dash="dot"))))
     fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=40, t=10, b=0))
     fig.update_yaxes(autorange="reversed", tickfont=dict(color=C["text"]))
-    fig.update_xaxes(range=[-1.2 if row["s_lumpy"] < 0 else 0, 3.2], showgrid=True, gridcolor="#1d1e19")
+    fig.update_xaxes(range=[0, 108], showgrid=True, gridcolor="#1d1e19")
     return fig
 
 
@@ -328,14 +327,14 @@ def universe_funnel(fn, h=340):
 
 def label_timeline(hist, h=150):
     """When this stock carried which label, at what price."""
-    order = {"WAIT": 1, "EMERGING": 2, "LEADER": 3, "BROKE": 0}
+    order = {"WAIT": 1, "EMERGING": 2, "LEADER": 3, "HOT": 4, "BROKE": 0}
     hist = hist.assign(asof=pd.to_datetime(hist["asof"]), y=hist.status.map(order))
     fig = go.Figure(go.Scatter(x=hist["asof"], y=hist.y, mode="lines+markers", line=dict(color=C["line"], width=1, shape="hv"),
                                marker=dict(size=10, color=[STATUS_C.get(s, C["dim"]) for s in hist.status]),
                                customdata=list(zip(hist.status.str.lower(), hist.close)),
                                hovertemplate="%{x|%d %b %Y}: %{customdata[0]} at Rs %{customdata[1]:,.1f}<extra></extra>"))
     fig = chart_layout(fig, h).update_layout(showlegend=False, hovermode="closest", margin=dict(l=0, r=0, t=6, b=0))
-    fig.update_yaxes(tickvals=[0, 1, 2, 3], ticktext=["broke", "wait", "emerging", "leader"], range=[-.5, 3.5])
+    fig.update_yaxes(tickvals=[0, 1, 2, 3, 4], ticktext=["broke", "wait", "emerging", "leader", "hot"], range=[-.5, 4.5])
     return fig
 
 

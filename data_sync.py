@@ -120,7 +120,9 @@ def bhavcopy(s, d):
 
 
 def sync_prices(con, s, since, log=print):
-    have = {r[0] for r in con.execute("select distinct trade_date from daily_market where trade_date >= ?", [since]).fetchall()}
+    # a day counts as loaded only if it has most of the market (~1,700+ stocks since 2022); a partly loaded day (old import, crash) is fetched again
+    have = {r[0] for r in con.execute("""select trade_date from daily_market where trade_date >= ?
+                                         group by 1 having count(*) >= 1500""", [since]).fetchall()}
     days = [since + timedelta(n) for n in range((date.today() - since).days + 1)]
     days = [d for d in days if d.weekday() < 5 and d not in have]
     added = 0

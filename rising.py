@@ -33,6 +33,8 @@ RULES = dict(
     near_high=.85,    # trend: price at least 85% of its 52-week high (within 15%)
     wait_floor=.60,   # WAIT only if price is still at least 60% of its high
     run_up=.80,       # 1-year rise that splits LEADER (already ran) from EMERGING (not yet)
+    too_hot=1.50,     # leaders already up 150%+ in a year: 36-month backtest (Jun 2023 - May 2026) showed these hit the
+                      # -20% stop far more often; capping LEADER here lifted it from +4.9% to +8.2% vs the typical stock
 )
 
 
@@ -43,7 +45,8 @@ def classify(f, rules=None):
     accel = (f.sales_yoy > f.sales_yoy_2) | (f.opm_chg > 0)
     trend = f.above_200 & (f.off_high > R["near_high"])
     s = pd.Series(None, index=f.index, dtype=object)
-    s[growth & trend & (f.ret1y >= R["run_up"])] = "LEADER"
+    s[growth & trend & (f.ret1y >= R["run_up"]) & (f.ret1y < R["too_hot"])] = "LEADER"
+    s[growth & trend & (f.ret1y >= R["too_hot"])] = "HOT"  # still growing, but ran too far: shown, not a buy
     s[growth & accel & trend & (f.ret1y < R["run_up"])] = "EMERGING"
     s[growth & accel & ~trend & (f.off_high > R["wait_floor"]) & (f.ret1y < R["run_up"]) & s.isna()] = "WAIT"
     return s
@@ -74,9 +77,12 @@ def explain(row, sales_base=None, profit_base=None):
              dict(name="acceleration", rule="either passes" + (" · not needed for leaders" if label == "LEADER" else ""),
                   tests=accel, passed=any(x["passed"] for x in accel)),
              dict(name="trend", rule="both must pass", tests=trend, passed=all(x["passed"] for x in trend)),
-             dict(name="run-up", rule="splits leader / emerging",
+             dict(name="run-up", rule="splits leader / emerging · too hot = off",
                   tests=[t("1-year price rise", ret1y, R["run_up"], ret1y >= R["run_up"], "pct",
-                           "above = LEADER (already ran) · below = EMERGING (not yet)")], passed=None)]
+                           "above = LEADER (already ran) · below = EMERGING (not yet)"),
+                         t("not too hot (1-year rise)", ret1y, R["too_hot"], ret1y < R["too_hot"], "pct",
+                           f"above +{R['too_hot']:.0%}: leaders this hot hit the -20% stop most often in the backtest")],
+                  passed=None)]
 
     nxt = []
     line = max(dma or 0, R["near_high"] * (high or 0)) or None  # the price that passes the trend gate
@@ -92,6 +98,13 @@ def explain(row, sales_base=None, profit_base=None):
         nxt.append(("watch", f"next results: sales above ₹{sales_base * (1 + R['sales_yoy']):,.0f} Cr"
                     + (f", profit above ₹{profit_base * (1 + R['pat_yoy']):,.0f} Cr" if profit_base and profit_base > 0 else ""),
                     f"needed to keep +{R['sales_yoy']:.0%} sales / +{R['pat_yoy']:.0%} profit growth vs a year ago"))
+    if label == "LEADER" and pd.notna(ret1y):
+        hot = close * (1 + R["too_hot"]) / (1 + ret1y)
+        nxt.append(("watch", f"rises above ₹{hot:,.1f} ({hot / close - 1:+.1%})",
+                    f"1-year run passes {R['too_hot']:.0%} → too hot, leaves the board"))
+    if label == "HOT":
+        nxt.append(("down", f"too hot: up {ret1y:+.0%} in a year",
+                    f"growth and trend pass, but leaders above +{R['too_hot']:.0%} hit the -20% stop most often"))
     if not label:
         stop = next((gt for gt in gates[:3] if gt["passed"] is False), None)
         if stop:
@@ -117,7 +130,9 @@ def position_alerts(buy_price, buy_date, last_close, today, status, latest_q=Non
     if held >= REVIEW_DAYS:
         keep = status in ("LEADER", "EMERGING")
         out.append(("EXIT" if not keep else "REVIEW",
-                    f"6-month review ({held}d held): {'still ' + status + ' - ok to keep' if keep else 'no longer on the board - exit'}"))
+                    f"6-month review ({held}d held): " + ("still " + status + " - ok to keep" if keep else
+                    "ran 150%+ in a year (HOT) - these hit the -20% stop most often, consider booking profit"
+                    if status == "HOT" else "no longer on the board - exit")))
     if latest_q and pd.Timestamp(latest_q["quarter_end"]) > pd.Timestamp(buy_date) - pd.Timedelta(days=60):
         if latest_q["sales_yoy"] < .15 or latest_q["pat_yoy"] < .15:
             out.append(("WARN", f"Growth slowed in {pd.Timestamp(latest_q['quarter_end']):%b %Y} quarter "
@@ -146,7 +161,7 @@ def season_data(refresh=False):
         return pd.read_pickle(SEASONS_FILE)
     import growth_screen as g
     parts = []
-    for q in pd.date_range("2024-12-31", "2026-06-30", freq="QE"):
+    for q in pd.date_range("2023-06-30", "2026-06-30", freq="QE"):  # prices backfilled to 2022 (data_sync backfill)
         on = q + pd.Timedelta(days=g.LAG_DAYS)
         f = g.features(q, on)
         r, held = g.fwd(f)
@@ -217,15 +232,18 @@ def scan():
     f["trigger"] = pd.concat([f.dma200, .85 * f.high52], axis=1).max(axis=1).where(f.status == "WAIT")
 
     b = f[f.status.notna()].copy()
-    # score = the same parts as growth_screen.growth_score, kept separately so the app can show the breakdown
-    rk = lambda s: s.clip(-1, 5).rank(pct=True)
-    b["s_sales"], b["s_profit"], b["s_margin"] = rk(b.sales_yoy), rk(b.pat_yoy), .5 * b.opm_chg.rank(pct=True)
-    b["s_mom"], b["s_lumpy"] = .5 * b.ret3m.rank(pct=True), -1.0 * b.lumpy
-    b["score"] = b[["s_sales", "s_profit", "s_margin", "s_mom", "s_lumpy"]].sum(axis=1)
+    # steadiness score (0-100) orders stocks within a label. 36-month backtest, top 15 growers a month: ranking by the
+    # biggest sales/profit jumps did no better than random (+5% vs the typical stock, 34% hit a -20% stop); ranking by
+    # steadiness did +10% with 20% stopped out, and held in both the 2024-25 fall and the recovery. Each part is a
+    # rank 0..25 among board stocks; kept separately so the app can show the breakdown.
+    rk = lambda s: 25 * s.rank(pct=True)
+    b["s_size"], b["s_calm"] = rk(b.market_cap_cr), rk(-b.vol60)
+    b["s_accum"], b["s_margin"] = rk(b.deliv_chg).fillna(12.5), rk(b.opm_chg)
+    b["score"] = b[["s_size", "s_calm", "s_accum", "s_margin"]].sum(axis=1).round(1)
 
     # everything the "how it was ranked" panels need: every scanned stock (for the crowd strips) + funnel counts
     keep = ["symbol", "status", "close", "dma200", "high52", "streak", "sales_yoy", "pat_yoy", "seq_ups", "sales_yoy_2",
-            "opm_chg", "above_200", "off_high", "ret1y", "ret3m", "lumpy", "qtr"]
+            "opm_chg", "above_200", "off_high", "ret1y", "ret3m", "lumpy", "qtr", "vol60", "deliv_chg"]
     f[keep].pipe(save_csv, DATA / "universe.csv", index=False)
     # the market's day-by-day move (median of liquid stocks) — used to measure how a stock behaves on panic days
     liquid = g.turn.rolling(60, min_periods=20).median() >= 1
@@ -254,7 +272,7 @@ def scan():
         for c in ["company_name", "close", "qtr", "sales_yoy", "pat_yoy", "off_high", "above_200", "ret1y"]:
             broke[c] = broke.symbol.map(cur[c]) if c in cur else None
     out = pd.concat([b.reset_index(drop=True), broke], ignore_index=True)
-    order = {"LEADER": 0, "EMERGING": 1, "WAIT": 2, "BROKE": 3}
+    order = {"LEADER": 0, "EMERGING": 1, "WAIT": 2, "HOT": 3, "BROKE": 4}
     out = out.sort_values(["status", "score"], key=lambda s: s.map(order) if s.name == "status" else -s.fillna(0))
     out.pipe(save_csv, BOARD, index=False)
     h = out[["asof", "symbol", "status", "close", "score"]]

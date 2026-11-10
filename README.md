@@ -13,7 +13,7 @@ A calm, terminal-style tracker for Indian (NSE) growth stocks. It answers one qu
   the rule-based verdict sits beside each one as a cross-check (≠ where they disagree). Research ratings, not buy/sell calls
 - **How it was ranked** — on every stock: the four gates as connected cards with bullet bars (value vs threshold),
   what would change the label (price that breaks the trend, price that makes it a leader, sales needed next quarter),
-  a waterfall of the ranking score, where the stock sits among all scanned stocks on each metric, and its label
+  a waterfall of the steadiness score, where the stock sits among all scanned stocks on each metric, and its label
   history. The panel runs the exact same rules (`rising.RULES`) as the scan — a test keeps them in sync
 - **Growth story** for any stock — a 10-point plain-English growth check (sales every quarter, operating
   leverage, margins, cash vs profit, ROCE, debt, capacity build-up, promoter holding, receivables) plus
@@ -94,10 +94,19 @@ distributed with this repository.** Respect each source's terms of use; this too
 
 | Label | Rule | Backtest, next 6 months (median) |
 |---|---|---|
-| leader | 2+ strong growth quarters, price near highs and above its 200-day average, already up >80% in a year | +25% (83% of picks up) |
-| emerging | growth accelerating, margins up, price confirmed, up <80% in a year | +13% (rest of market: +2%) |
-| wait | growth accelerating but price not confirmed — *trigger* = price to close above | −10% (watch only) |
+| leader | 2+ strong growth quarters, price near highs and above its 200-day average, up 80–150% in a year | +14% (62% of picks up) |
+| emerging | growth accelerating, margins up, price confirmed, up <80% in a year | +10% (71% of picks up) |
+| hot | passes growth and trend but already up >150% in a year — shown, not a buy | +7%, worst 10% of picks −12% or lower |
+| wait | growth accelerating but price not confirmed — *trigger* = price to close above | +1% (watch only) |
 | broke | dropped off the board since the last scan | |
+
+Every other profitable, liquid stock: +4% median. Results seasons Jun 2023 – May 2026, prices back to 2022.
+
+Within a label, the board is ordered by a **steadiness score** (0–100): company size, calm price (small daily
+swings), accumulation (delivery % rising) and widening margins. In a 36-month test, the 15 steadiest growers each
+month beat the typical stock by about 10% and hit a −20% stop in 20% of cases; ranking by the biggest sales/profit
+jumps did no better than random (+5%, 34% stopped out). Reproduce it with `python research.py`; the rules
+sandbox in the app re-tests any threshold.
 
 Exit rule (tested against trailing stops and moving-average exits, which did worse): sell if price falls 20%
 below your buy price; at 6 months keep only if still leader/emerging.

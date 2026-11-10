@@ -23,7 +23,7 @@ import viz
 
 WATCH, POS = DATA / "watchlist.txt", DATA / "positions.csv"
 DEFAULT_EXCLUDE = ["Oil Gas & Consumable Fuels", "Information Technology", "Energy"]
-STATUSES = ["LEADER", "EMERGING", "WAIT", "BROKE"]
+STATUSES = ["LEADER", "EMERGING", "WAIT", "HOT", "BROKE"]
 CATALYST = ("Capacity addition", "Commencement of commercial production/operations",
             "Bagging/Receiving of orders/contracts", "Outcome of Board Meeting", "Investor Presentation",
             "Acquisition", "Press Release")
@@ -612,7 +612,7 @@ left.markdown(f'<div class="bar"><div class="brand">RISING<span class="dim"> // 
               f'<div class="meta">data {asof:%a %d %b %Y} &nbsp;·&nbsp; {counts}</div></div>', unsafe_allow_html=True)
 if right.button("update data", width="stretch", help="prices + NSE filings + new results + rescan (≈1–10 min)"):
     run_update()
-show('<div class="legend">leader = growing + already ran &gt;80% · emerging = growth accelerating, price confirmed · '
+show('<div class="legend">leader = growing + already ran 80–150% · hot = ran &gt;150%, not a buy · emerging = growth accelerating, price confirmed · '
      'wait = watch only, buy above trigger · exit = −20% stop or 6-month review · research tool, not advice</div>')
 
 # Freshness: NSE publishes a trading day's file ~6–8 pm IST. New data can exist once 7 pm has passed on the next
@@ -806,18 +806,19 @@ with t_board:
     except Exception:
         surv = {}
     n_surv = int(v.symbol.isin(surv).sum())
-    sec("board", f"{len(v)} of {len(b)} · sorted by status, then score"
+    sec("board", f"{len(v)} of {len(b)} · sorted by status, then steadiness"
         + (f" · {n_surv} on NSE's surveillance list (⚠ = extra risk: price limits, operator activity)" if n_surv else ""))
     show(table([dict(st=status(r.status) + (' <span class="am">new</span>' if r.new and r.status != "BROKE" else ""),
                      sym=f"<b>{esc(r.symbol)}</b>" + (' <span class="dn" title="on NSE surveillance list">⚠ watch-list</span>'
                                                       if r.symbol in surv else ""), ind=f'<span class="dim">{esc(r.industry) if pd.notna(r.industry) else "–"}</span>',
                      c=num(r.close), d=pct(r.chg1d, 1), q=f'<span class="dim">{pd.Timestamp(r.qtr):%b %y}</span>' if pd.notna(r.qtr) else "",
                      s=pct(r.sales_yoy), p=pct(r.pat_yoy), cap="yes" if r.capex is True or r.capex == "True" else '<span class="dim">–</span>',
-                     pe=num(r.pe, 0), y=pct(r.ret1y), t=num(r.trigger), m=num(r.market_cap_cr, 0))
+                     pe=num(r.pe, 0), y=pct(r.ret1y), t=num(r.trigger), m=num(r.market_cap_cr, 0),
+                     sc=num(r.score, 0) if pd.notna(getattr(r, "score", None)) else "–")
                 for r in v.itertuples()],
                [("st", "status"), ("sym", "symbol"), ("ind", "industry"), ("c", "close"), ("d", "1d"), ("q", "qtr"),
-                ("s", "sales yoy"), ("p", "profit yoy"), ("cap", "capex"), ("pe", "p/e"), ("y", "1y"), ("t", "trigger"), ("m", "mcap cr")],
-               numeric={"c", "d", "s", "p", "pe", "y", "t", "m"}))
+                ("s", "sales yoy"), ("p", "profit yoy"), ("cap", "capex"), ("pe", "p/e"), ("y", "1y"), ("t", "trigger"), ("m", "mcap cr"), ("sc", "steady")],
+               numeric={"c", "d", "s", "p", "pe", "y", "t", "m", "sc"}))
 
 # ---------------------------------------------------------------- stock
 with t_stock:
@@ -899,21 +900,22 @@ with t_stock:
                     for k, a, w in e["next"]) + "</div>")
             c1, c2 = st.columns([2, 3], gap="large")
             with c1:
-                on_board = sym in bs.index and pd.notna(bs.loc[sym].get("s_sales"))
+                on_board = sym in bs.index and pd.notna(bs.loc[sym].get("s_calm"))
                 if on_board:
                     lab = b[b.status == r.status].reset_index(drop=True)
                     rank = int(lab.index[lab.symbol == sym][0]) + 1
-                    show(f'<div class="meta">score breakdown · #{rank} of {len(lab)} {r.status.lower()} · decides the order on the board</div>')
+                    show(f'<div class="meta">score breakdown · #{rank} of {len(lab)} {r.status.lower()} · steadiness · decides the order on the board</div>')
                     st.plotly_chart(viz.score_waterfall(bs.loc[sym], rank, len(lab)), width="stretch", config=PLOT)
-                    show('<div class="note">each part is a rank from 0 to 1 among all board stocks (1 = best). '
-                         'the label comes from the gates; the score only orders stocks within a label.</div>')
+                    show('<div class="note">each part is a rank from 0 to 25 among all board stocks (25 = best). '
+                         'the label comes from the gates; the score only orders stocks within a label. in the 36-month '
+                         'backtest the 15 steadiest growers each month hit the −20% stop far less often than the fastest-growing.</div>')
                 hh = history()
                 hh = hh[hh.symbol == sym] if len(hh) else hh
                 if len(hh):
                     show('<div class="meta">label history</div>')
                     st.plotly_chart(viz.label_timeline(hh), width="stretch", config=PLOT)
                 bt_p = DATA / "backtest.json"
-                if e["label"] in ("LEADER", "EMERGING", "WAIT") and read_json(bt_p):
+                if e["label"] in ("LEADER", "EMERGING", "WAIT", "HOT") and read_json(bt_p):
                     bt_ = pd.DataFrame(read_json(bt_p))
                     mine, rest = bt_[bt_.status == e["label"]], bt_[bt_.status == "everything else"]
                     if len(mine):
@@ -1068,6 +1070,8 @@ with t_watch:
                 sig = '<span class="up">triggered</span>'
             elif r.status == "BROKE":
                 sig = '<span class="dn">dropped off</span>'
+            elif r.status == "HOT":
+                sig = '<span class="am">ran too far</span>'
             rows.append(dict(sym=f"<b>{esc(s_)}</b>", st=status(r.status), c=num(r.close), t=num(r.trigger),
                              g=pct(r.trigger / r.close - 1, 1) if pd.notna(r.trigger) else '<span class="dim">–</span>',
                              s=pct(r.sales_yoy), p=pct(r.pat_yoy), sig=sig))
@@ -1095,7 +1099,7 @@ with t_hist:
         if st.button("reset to current rules"):
             for key in [x for x in st.session_state if x.startswith(k)]:
                 del st.session_state[key]
-        a1, a2, a3, a4, a5, a6 = st.columns(6)
+        a1, a2, a3, a4, a5, a6, a7 = st.columns(7)
         mine = dict(
             sales_yoy=a1.slider("sales growth >", 0, 80, int(R["sales_yoy"] * 100), 5, format="%d%%", key=k + "s") / 100,
             pat_yoy=a2.slider("profit growth >", 0, 100, int(R["pat_yoy"] * 100), 5, format="%d%%", key=k + "p") / 100,
@@ -1103,13 +1107,14 @@ with t_hist:
             seq_ups=a4.slider("sales up QoQ of 3 ≥", 0, 3, R["seq_ups"], key=k + "u"),
             near_high=1 - a5.slider("within x% of 52w high", 5, 40, int(round((1 - R["near_high"]) * 100)), 5,
                                     format="%d%%", key=k + "h") / 100,
-            run_up=a6.slider("leader if 1y run >", 30, 200, int(R["run_up"] * 100), 10, format="%d%%", key=k + "r") / 100)
+            run_up=a6.slider("leader if 1y run >", 30, 200, int(R["run_up"] * 100), 10, format="%d%%", key=k + "r") / 100,
+            too_hot=a7.slider("too hot if 1y run >", 100, 500, int(R["too_hot"] * 100), 10, format="%d%%", key=k + "t") / 100)
         changed = {kk: vv for kk, vv in mine.items() if abs(vv - R[kk]) > 1e-9}
         U = universe()
         if len(U):
             now_lab = rising.classify(U).fillna("–")
             new_lab = rising.classify(U, mine).fillna("–")
-            cnt = lambda s: " · ".join(f'{status(x)} <b>{int((s == x).sum())}</b>' for x in ("LEADER", "EMERGING", "WAIT"))
+            cnt = lambda s: " · ".join(f'{status(x)} <b>{int((s == x).sum())}</b>' for x in ("LEADER", "EMERGING", "WAIT", "HOT"))
             joined = U.symbol[new_lab.isin(["LEADER", "EMERGING"]) & ~now_lab.isin(["LEADER", "EMERGING"])]
             left_ = U.symbol[now_lab.isin(["LEADER", "EMERGING"]) & ~new_lab.isin(["LEADER", "EMERGING"])]
             show(f'<div class="meta">today · current rules: {cnt(now_lab)} &nbsp;→&nbsp; your rules: {cnt(new_lab)}</div>'

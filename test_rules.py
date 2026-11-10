@@ -12,15 +12,16 @@ def row(**kw):
 
 f = pd.DataFrame([
     row(),                                    # 0 accelerating, confirmed, not run -> EMERGING
-    row(ret1y=1.5),                           # 1 already ran -> LEADER
+    row(ret1y=1.2),                           # 1 already ran (but not too hot) -> LEADER
     row(above_200=False, off_high=.75),       # 2 not confirmed -> WAIT
     row(above_200=False, off_high=.50),       # 3 too far below high -> nothing
     row(sales_yoy=.10),                       # 4 growth too slow -> nothing
     row(sales_yoy_2=.60, opm_chg=-1),         # 5 decelerating -> nothing (not LEADER either: ret1y < .8)
     row(above_200=False, ret1y=1.5),          # 6 ran + broken trend -> nothing (WAIT is only for not-yet-run)
+    row(ret1y=2.0),                           # 7 too hot (up 200%): leaders this hot got stopped out most -> HOT
 ])
 got = classify(f).fillna("-").tolist()
-assert got == ["EMERGING", "LEADER", "WAIT", "-", "-", "-", "-"], got
+assert got == ["EMERGING", "LEADER", "WAIT", "-", "-", "-", "-", "HOT"], got
 
 # the "how it was ranked" panel must always agree with the real label
 from rising import explain  # noqa: E402
@@ -32,12 +33,17 @@ for i, r in f.assign(close=100.0, dma200=90.0, high52=105.0).iterrows():
         assert any("LEADER" in why for _, _, why in e["next"]), e["next"]   # shows the price that makes it a leader
     if e["label"] is None:
         assert e["next"] and "stopped at" in e["next"][0][1], e["next"]   # says which gate it failed
+    if e["label"] == "HOT":
+        assert e["next"] and "too hot" in e["next"][0][1], e["next"]      # says it ran too far
+    if e["label"] == "LEADER":
+        assert any("too hot" in why for _, _, why in e["next"]), e["next"]  # shows the price where it gets too hot
 
 lv = lambda a: [x[0] for x in a]
 assert lv(position_alerts(100, "2026-10-01", 95, "2026-11-01", "EMERGING")) == []
 assert lv(position_alerts(100, "2026-10-01", 79, "2026-11-01", "EMERGING")) == ["EXIT"]           # 20% stop
 assert lv(position_alerts(100, "2026-01-01", 130, "2026-08-01", "LEADER")) == ["REVIEW"]           # 6m, still on board
 assert lv(position_alerts(100, "2026-01-01", 130, "2026-08-01", "not on board")) == ["EXIT"]      # 6m, dropped off
+assert "booking profit" in position_alerts(100, "2026-01-01", 300, "2026-08-01", "HOT")[0][1]  # 6m, ran too far
 q = dict(quarter_end="2026-09-30", sales_yoy=.05, pat_yoy=.40)
 assert lv(position_alerts(100, "2026-10-01", 105, "2026-11-01", "EMERGING", q)) == ["WARN"]       # growth slowed
 
