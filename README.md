@@ -145,11 +145,11 @@ to that day.
 ```mermaid
 flowchart TD
     A["<b>~2,700 listed companies</b>"] --> B["<b>Scanned</b><br/>recent results · profitable<br/>sales ≥ ₹25 Cr a quarter · ₹1 Cr+ traded a day"]
-    B --> C{"<b>Growth</b><br/>sales & profit +15% YoY in 2 of last 3 qtrs<br/>latest qtr: sales +20%, profit +25%"}
-    C --> E{"<b>Trend</b><br/>above 200-day average<br/>within 15% of 52-week high"}
+    B --> C(["<b>Growth</b><br/>sales & profit +15% YoY in 2 of last 3 qtrs<br/>latest qtr: sales +20%, profit +25%"])
+    C --> E(["<b>Trend</b><br/>above 200-day average<br/>within 15% of 52-week high"])
     E -->|"not yet, but<br/>growth accelerating"| J["<b>WAIT</b><br/>watch · trigger price"]
-    E -->|confirmed| F{"<b>Run-up</b><br/>1-year price rise"}
-    F -->|"under 80%"| D{"<b>Acceleration</b><br/>growth speeding up<br/>or margins widening"}
+    E -->|confirmed| F(["<b>Run-up</b><br/>1-year price rise"])
+    F -->|"under 80%"| D(["<b>Acceleration</b><br/>growth speeding up<br/>or margins widening"])
     F -->|"80–150%"| H["<b>LEADER</b>"]
     F -->|"over 150%"| I["<b>HOT</b><br/>shown, not a buy"]
     D --> G["<b>EMERGING</b>"]
