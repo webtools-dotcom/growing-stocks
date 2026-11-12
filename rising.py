@@ -428,8 +428,9 @@ def _update():
             print(f"   industry list failed: {e}")
     print("3/3 scan")
     out = scan()
-    pos = DATA / "positions.csv"
-    held = list(pd.read_csv(pos).symbol) if pos.exists() else []
+    import portfolio
+    opened = portfolio.open_positions()
+    held = list(opened.symbol)
     watch = (DATA / "watchlist.txt").read_text().split() if (DATA / "watchlist.txt").exists() else []
     if held or watch:  # bad-news check: red-flag filings + negative headlines, no AI tokens
         from brief import alerts
@@ -443,9 +444,9 @@ def _update():
             print(f"   alerts skipped: {e}")
         print(f"   alerts: {sum(map(len, found.values()))} red flags / negative headlines in the last 14 days"
               + (f" ({', '.join(found)})" if found else ""))
-    if pos.exists() and settings.ai_ready():
+    if held and settings.ai_ready():
         from brief import brief  # only calls the LLM when a holding filed something new
-        for s in pd.read_csv(pos).symbol:
+        for s in held:
             try:
                 brief(s, status=out.set_index("symbol").status.get(s, ""))
             except Exception as e:
@@ -500,10 +501,10 @@ def notify_changes(out, held, watch, found):
     seen_p = DATA / "notified.json"
     seen = set(read_json(seen_p, []))
     msgs = []
-    pos = DATA / "positions.csv"
-    if held and pos.exists():
+    import portfolio
+    if held:
         con = open_db()
-        for p in pd.read_csv(pos).itertuples():
+        for p in portfolio.open_positions().itertuples():
             row = con.execute("""select close, trade_date from daily_market join instruments using (isin) where symbol = ?
                                  order by trade_date desc limit 1""", [p.symbol]).fetchone()
             if row:

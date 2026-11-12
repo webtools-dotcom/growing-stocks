@@ -150,11 +150,12 @@ def checklist(f):
     fa, cw = _row(bal, "Fixed Assets"), _row(bal, "CWIP")
     if len(fa) >= 3:
         cap = fa.add(cw, fill_value=0)
-        grow = cap.iloc[-1] / cap.iloc[-3] - 1 if cap.iloc[-3] else float("nan")
+        grow = cap.iloc[-1] / cap.iloc[-3] - 1 if cap.iloc[-3] and pd.notna(cap.iloc[-3]) and cap.iloc[-3] > 0 else float("nan")
         pipe = cw.iloc[-1] / fa.iloc[-1] if len(cw) and fa.iloc[-1] else 0
         out.append(("pass" if grow > .3 or pipe > .25 else "watch" if grow > .1 else "n/a", "Building capacity",
-                    f"plant & machinery + work-in-progress {grow:+.0%} over 2 periods; "
-                    f"₹{cw.iloc[-1] if len(cw) else 0:,.0f} Cr still under construction"))
+                    (f"plant & machinery + work-in-progress {grow:+.0%} over 2 periods; " if pd.notna(grow)
+                     else "plant & machinery: no earlier figure to compare; ")
+                    + f"₹{cw.iloc[-1] if len(cw) else 0:,.0f} Cr still under construction"))
 
     promo = _row(sh, "Promoters")
     if len(promo) >= 2:

@@ -402,3 +402,60 @@ def panic_bars(p, h=150):
     fig.update_xaxes(ticksuffix="%", range=[min(p["market_avg"], p["stock_avg"]) * 100 * 1.1, 0])
     fig.update_yaxes(tickfont=dict(color=C["text"]))
     return fig
+
+
+# ---------------------------------------------------------------- portfolio
+PICK_C = {"system pick": C["green"], "watch-only": C["blue"], "ran too far": STATUS_C["HOT"], "off the system": C["muted"]}
+
+
+def pick_group(label):
+    """Where a trade's entry sat relative to the system: what the scan said the day you bought."""
+    return ("system pick" if label in ("LEADER", "EMERGING") else "watch-only" if label == "WAIT"
+            else "ran too far" if label == "HOT" else "off the system")
+
+
+def trade_results(t, h=None):
+    """Every closed trade as a bar (return %), oldest at the top, coloured by what the system said when you bought."""
+    t = t.sort_values("exit")
+    h = h or max(220, 26 * len(t) + 60)
+    fig = go.Figure()
+    for grp, col in PICK_C.items():
+        d = t[t.group == grp]
+        if d.empty:
+            continue
+        fig.add_trace(go.Bar(
+            y=d.symbol + "  " + d.exit.dt.strftime("%d %b"), x=d.ret * 100, orientation="h", name=grp, marker_color=col,
+            text=[f"{r:+.1%}" for r in d.ret], textposition="outside", textfont=dict(color=C["text"], size=10),
+            customdata=list(zip(d.entry.dt.strftime("%d %b"), d.days, d.pnl, d.label)),
+            hovertemplate="%{y}: %{x:.1f}%<br>bought %{customdata[0]} · held %{customdata[1]} days · "
+                          "₹%{customdata[2]:,.0f}<br>scan said %{customdata[3]} when you bought<extra></extra>"))
+    lim = max(5, (t.ret.abs().max() * 100) * 1.35) if len(t) else 10
+    fig = chart_layout(fig, h).update_layout(hovermode="closest", barmode="overlay", margin=dict(l=0, r=10, t=30, b=0),
+                                             legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0))
+    fig.update_yaxes(categoryorder="array", categoryarray=list(t.symbol + "  " + t.exit.dt.strftime("%d %b"))[::-1],
+                     tickfont=dict(color=C["text"], size=10))
+    fig.update_xaxes(range=[-lim, lim], ticksuffix="%", zeroline=True, zerolinecolor=C["dim"])
+    return fig
+
+
+def hold_vs_return(t, stop=.20, h=300):
+    """Days held vs result: winners cut early and losers held long shows up as a slope down to the right."""
+    fig = go.Figure()
+    for grp, col in PICK_C.items():
+        d = t[t.group == grp]
+        if d.empty:
+            continue
+        fig.add_trace(go.Scatter(x=d.days, y=d.ret * 100, mode="markers+text", name=grp, text=d.symbol, textposition="top center",
+                                 textfont=dict(size=9, color=C["dim"]),
+                                 marker=dict(size=(d.invested / t.invested.max() * 22 + 7).clip(7, 29), color=col,
+                                             line=dict(color=C["bg"], width=1)),
+                                 customdata=list(zip(d.pnl, d.invested)),
+                                 hovertemplate="%{text}: %{y:.1f}% in %{x} days<br>₹%{customdata[0]:,.0f} on "
+                                               "₹%{customdata[1]:,.0f}<extra></extra>"))
+    fig.add_hline(y=-stop * 100, line=dict(color=C["red"], dash="dot", width=1), annotation_text=f"−{stop:.0%} stop",
+                  annotation_position="bottom right", annotation_font=dict(color=C["red"], size=10))
+    fig.add_hline(y=0, line=dict(color=C["line"], width=1))
+    fig = chart_layout(fig, h).update_layout(hovermode="closest", showlegend=False, margin=dict(l=0, r=10, t=20, b=0))
+    fig.update_xaxes(title=dict(text="days held", font=dict(size=10)), rangemode="tozero")
+    fig.update_yaxes(ticksuffix="%")
+    return fig

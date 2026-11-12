@@ -135,6 +135,23 @@ since yesterday, results due this week, and red-flag filings or negative headlin
 without AI. A **thesis tracker** stores why you bought and shows each quarter whether that reason still holds.
 On Windows, desktop notifications fire when a stop is hit, a trigger is crossed or a red flag appears.
 
+### Portfolio — your own trading record, measured
+
+A **portfolio** page (top right) keeps a ledger of every buy and sell: import your broker tradebook (Zerodha
+xlsx/csv, or any csv with symbol, date, side, qty, price — re-importing never duplicates) or add trades by hand.
+Positions and round trips are worked out from the ledger (FIFO), so a stock you sold leaves your positions on its
+own. Instead of repeating your broker's P&L screen, it answers the questions a statement doesn't:
+
+- **Did you follow the system?** For every trade, the label the scan would have given on the day you bought
+  (same rules, that day's data), and how your system picks did against your own picks.
+- **Discipline** — trades that went past the −20% stop and what holding on cost, how long you keep winners versus
+  losers, and what each stock did after you sold.
+- **Hidden costs** — estimated taxes and DP charges as a share of your profit, and the move a typical trade of
+  yours needs just to break even.
+- **Risk now** — what you'd lose if every stop hit, positions already past the stop, and your largest holding.
+
+Your ledger stays in `data/` on your machine and is never committed.
+
 ---
 
 ## How it picks stocks
@@ -350,6 +367,7 @@ flowchart TD
 | `fundamentals.py` | Full financials per stock and the 10-point growth check |
 | `insights.py` | Safety radar, capacity bridge, order book, margin band, P/E history, insider trades, rule-based verdicts |
 | `brief.py` | Optional AI brief and daily red-flag alerts |
+| `portfolio.py` | Trade ledger, tradebook import, FIFO positions and round trips, cost estimates, entry-day labels |
 | `viz.py` | Every chart builder and the colour palette |
 | `research.py` | The 3-year study behind the labels and the steadiness score |
 | `exit_backtest.py` | The exit-rule backtest |

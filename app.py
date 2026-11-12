@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import duckdb
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -12,16 +13,17 @@ import streamlit as st
 
 import brief  # filings-grounded LLM brief
 import fundamentals  # full financials + growth checklist
+import portfolio as pf  # trade ledger, positions, round trips, costs
 import rising  # exit rule + alert logic (shared with backtests)
 import settings  # API keys in the OS keychain
 from config import DATA, HERE, open_db
-from safeio import read_json, save_csv, save_json, save_text
+from safeio import read_json, save_json, save_text
 from data_sync import adjust_prices
 import insights  # trap scores, capacity bridge, order book, valuation, smart money
 from viz import C, PLOT, STATUS_C, chart_layout
 import viz
 
-WATCH, POS = DATA / "watchlist.txt", DATA / "positions.csv"
+WATCH, POS = DATA / "watchlist.txt", DATA / "positions.csv"  # positions.csv: pre-ledger, migrated once
 DEFAULT_EXCLUDE = ["Oil Gas & Consumable Fuels", "Information Technology", "Energy"]
 STATUSES = ["LEADER", "EMERGING", "WAIT", "HOT", "BROKE"]
 CATALYST = ("Capacity addition", "Commencement of commercial production/operations",
@@ -630,7 +632,11 @@ def settings_dialog():
         st.rerun()
 
 
-left, mid, right = st.columns([6, 1, 1])
+left, pfb, mid, right = st.columns([5, 1, 1, 1])
+in_pf = st.session_state.get("view") == "portfolio"
+if pfb.button("← terminal" if in_pf else "portfolio", width="stretch", type="primary" if in_pf else "secondary"):
+    st.session_state["view"] = "terminal" if in_pf else "portfolio"
+    st.rerun()
 if mid.button("settings", width="stretch"):
     settings_dialog()
 if b.empty:
@@ -667,10 +673,9 @@ elif kind == "stale":
 
 excl = st.session_state.get("excl", [i for i in DEFAULT_EXCLUDE if i in set(b.industry.dropna())])
 watch = WATCH.read_text().split() if WATCH.exists() else []
-pos = pd.read_csv(POS) if POS.exists() else pd.DataFrame(columns=["symbol", "buy_date", "buy_price", "qty"])
-if "thesis" not in pos:
-    pos["thesis"] = ""
-pos["thesis"] = pos.thesis.fillna("").astype(str)
+pf.migrate(POS)
+pos = pf.open_positions()  # only trades still open: anything sold has left on its own
+pos["thesis"] = pos.symbol.map(pf.notes()).fillna("").astype(str)
 THESIS = DATA / "thesis"
 
 
@@ -685,6 +690,227 @@ def snapshot_thesis(sym, thesis):
     checks = {t_: v_ for v_, t_, _ in fundamentals.checklist(f)} if f else {}
     save_json(p_, dict(thesis=thesis, date=str(pd.Timestamp.now().date()), checks=checks))
 bs = b.set_index("symbol")
+
+
+# ---------------------------------------------------------------- portfolio (its own page, button at the top)
+def trade_insights(t, o, open_value):
+    """Plain-English findings from your own trades — the things a broker statement doesn't tell you.
+    -> list of (kind, headline, detail) for the insight cards; kind in up / down / watch."""
+    out = []
+    if len(t):
+        w, l_ = t[t.pnl > 0], t[t.pnl <= 0]
+        pay = (w.ret.mean() / -l_.ret.mean()) if len(w) and len(l_) and l_.ret.mean() < 0 else None
+        out.append(("up" if t.pnl.sum() > 0 else "down",
+                    f"{len(w)} of {len(t)} trades won · average win {w.ret.mean():+.1%} vs loss {l_.ret.mean():+.1%}"
+                    if len(w) and len(l_) else f"{len(w)} of {len(t)} trades won",
+                    (f"each win is {pay:.1f}× the size of each loss" if pay else "")
+                    + f" · ₹{t.pnl.sum() / len(t):+,.0f} per trade on average"))
+        g = t.groupby("group").agg(n=("ret", "size"), r=("ret", "mean"), pnl=("pnl", "sum"))
+        if "system pick" in g.index and len(g) > 1:
+            sp, rest = g.loc["system pick"], g.drop("system pick")
+            rr = (t[t.group != "system pick"].ret.mean())
+            few = " · too few system picks to judge yet" if sp.n < 5 else ""
+            pl = lambda n: f"{int(n)} trade{'s' if n != 1 else ''}"
+            out.append(("up" if sp.r > rr else "watch",
+                        f"system picks {sp.r:+.1%} vs your own picks {rr:+.1%}",
+                        f"{pl(sp.n)} bought while the scan said leader/emerging · {pl(rest.n.sum())} bought off the "
+                        f"system (wait, hot, no label or too small to scan) · judged on the day you bought{few}"))
+        elif "system pick" not in g.index:
+            out.append(("watch", "none of your closed trades were system picks",
+                        "on the day you bought, none was a leader or emerging name — the backtest edge doesn't apply to them"))
+        crossed = t[t.crossed_stop]
+        if len(crossed):
+            held_on = crossed[crossed.ret < -rising.STOP_PCT]
+            cost = float(((-rising.STOP_PCT - held_on.ret) * held_on.invested).sum()) if len(held_on) else 0
+            rec = crossed[crossed.ret >= -rising.STOP_PCT]
+            out.append(("down" if cost > 0 else "watch",
+                        f"{len(crossed)} trade{'s' if len(crossed) > 1 else ''} went past the −{rising.STOP_PCT:.0%} stop",
+                        (f"holding on cost ₹{cost:,.0f} more than selling at the stop" if cost > 0 else "")
+                        + (f"{' · ' if cost > 0 else ''}{len(rec)} recovered above it before you sold" if len(rec) else "")))
+        if len(w) >= 2 and len(l_) >= 2:
+            dw, dl = w.days.median(), l_.days.median()
+            if dl > dw * 1.5 and dl - dw >= 5:
+                out.append(("down", f"losers held {dl:.0f} days, winners {dw:.0f}",
+                            "the classic trap: cutting winners early and waiting for losers to come back"))
+            else:
+                out.append(("up", f"winners held {dw:.0f} days, losers {dl:.0f}", "you're not sitting on losers longer than winners"))
+        aft = t.dropna(subset=["after"])
+        if len(aft) >= 3:
+            wa = aft[aft.pnl > 0].after.median() if (aft.pnl > 0).any() else None
+            la = aft[aft.pnl <= 0].after.median() if (aft.pnl <= 0).any() else None
+            bits = []
+            if wa is not None:
+                bits.append(f"winners you sold moved {wa:+.1%} since")
+            if la is not None:
+                bits.append(f"losers you sold moved {la:+.1%} since")
+            out.append(("watch" if (wa or 0) > .1 else "up", "after you sold: " + " · ".join(bits),
+                        "a big positive number on winners means you sell too early; on losers it means you sold the bottom"))
+        gross = float(t.pnl.sum())
+        fees = pf.costs()
+        med = float((t.qty * t.avg_buy).median())
+        be = (pf.DP_CHARGE + .0023 * med) / med if med else 0
+        out.append(("down" if gross > 0 and fees > .25 * gross else "watch",
+                    f"charges ≈ ₹{fees:,.0f}" + (f" — {fees / gross:.0%} of what you made" if gross > 0 else ""),
+                    f"your typical trade is ₹{med:,.0f}: it needs a {be:.1%} move just to cover taxes and the "
+                    f"₹{pf.DP_CHARGE} DP charge on the sale · fewer, larger trades keep more of the gain"))
+    if len(o):
+        o_ = o.dropna(subset=["last"])
+        at_risk = float((o_.qty * (o_.last - o_.buy_price * (1 - rising.STOP_PCT))).clip(lower=0).sum())
+        past = o_[o_.last <= o_.buy_price * (1 - rising.STOP_PCT)]
+        top = o_.assign(v=o_.qty * o_.last).sort_values("v", ascending=False).iloc[0] if len(o_) else None
+        out.append(("down" if len(past) else "watch",
+                    f"if every stop hits you lose ₹{at_risk:,.0f} more" + (f" · {len(past)} already past the stop" if len(past) else ""),
+                    (f"{', '.join(past.symbol)} {'is' if len(past) == 1 else 'are'} below −{rising.STOP_PCT:.0%}: the rule says sell. "
+                     if len(past) else "")
+                    + (f"largest position {top.symbol} = {top.qty * top.last / open_value:.0%} of what you hold" if top is not None and open_value else "")))
+    return out
+
+
+def portfolio_page():
+    led = pf.load()
+    o = pf.open_positions(led)
+    nts = pf.notes()
+    t = pf.round_trips(led)
+    syms = sorted(set(t.symbol) | set(o.symbol))
+    since = min([led.date.min()] if len(led) else [pd.Timestamp.now()]) - pd.Timedelta(days=5)
+    px_all = pf.price_paths(syms, since) if syms else pd.DataFrame()
+    o["last"] = [px_all[s].dropna().iloc[-1] if s in px_all and px_all[s].notna().any() else np.nan for s in o.symbol]
+    # adjusted prices are in today's units: the latest close is the real last price
+    ctx = pf.entry_context(list(zip(t.symbol, t.entry)) + list(zip(o.symbol, o.buy_date)))
+    lab = lambda s, d: ctx.get(f"{s}|{pd.Timestamp(d).date()}", {}).get("label", "–")
+    if len(t):
+        t["label"] = [lab(s, d) for s, d in zip(t.symbol, t.entry)]
+        t["group"] = t.label.map(viz.pick_group)
+    t, o = pf.behaviour(t, o, px_all) if len(t) or len(o) else (t, o)
+    o["value"], o["cost"] = o.qty * o["last"], o.qty * o.buy_price
+
+    # ---- summary
+    open_value, open_cost = float(o.value.sum()), float(o.cost.sum())
+    realised, fees = float(t.pnl.sum()) if len(t) else 0.0, pf.costs(led)
+    wins = int((t.pnl > 0).sum()) if len(t) else 0
+    kv = [("holding", f"₹{open_value:,.0f}"), ("unrealised", pct(open_value / open_cost - 1, 1) if open_cost else "–"),
+          ("realised", f'<span class="{"up" if realised >= 0 else "dn"}">₹{realised:+,.0f}</span>'),
+          ("charges (est.)", f"₹{fees:,.0f}"), ("net realised", f'<span class="{"up" if realised - fees >= 0 else "dn"}">₹{realised - fees:+,.0f}</span>'),
+          ("closed trades", f"{len(t)}"), ("win rate", f"{wins / len(t):.0%}" if len(t) else "–"),
+          ("open", f"{len(o)}")]
+    show('<div class="kv">' + "".join(f"<div><span>{k}</span>{v}</div>" for k, v in kv) + "</div>")
+    if led.empty:
+        show('<div class="flag warn">no trades yet — import your broker tradebook or add a trade below.</div>')
+
+    # ---- open positions
+    if len(o):
+        sec("open positions", f"₹{open_value:,.0f} held · ₹{open_cost:,.0f} invested · stop −{rising.STOP_PCT:.0%} · review at 6 months")
+        rows = []
+        for r in o.sort_values("value", ascending=False).itertuples():
+            stop_px = r.buy_price * (1 - rising.STOP_PCT)
+            now_st = bs.status.get(r.symbol, None)
+            then = lab(r.symbol, r.buy_date)
+            al = rising.position_alerts(r.buy_price, r.buy_date, r.last, asof, now_st or "–", latest_q(r.symbol)) if pd.notna(r.last) else []
+            sig = '<span class="dim">hold</span>'
+            if al:
+                lvl, msg = al[0]
+                sig = f'<span class="{"dn" if lvl == "EXIT" else "am"}">{lvl.lower()}</span> <span class="dim">{esc(msg)}</span>'
+            rows.append(dict(sym=f"<b>{esc(r.symbol)}</b>", qty=f"{r.qty:g}", buy=num(r.buy_price, 2), last=num(r.last, 2),
+                             pnl=pct(r.last / r.buy_price - 1, 1), rs=f"₹{r.qty * (r.last - r.buy_price):+,.0f}",
+                             gap=('<span class="dn">past stop</span>' if r.last <= stop_px else pct(stop_px / r.last - 1, 1))
+                             if pd.notna(r.last) else "–",
+                             worst=pct(r.worst, 1), days=f"{(pd.Timestamp(asof) - pd.Timestamp(r.buy_date)).days}",
+                             then=status(then) if then in STATUS_C else f'<span class="dim">{esc(then)}</span>',
+                             now=status(now_st) if now_st in STATUS_C else '<span class="dim">off board</span>', sig=sig))
+        show(table(rows, [("sym", "symbol"), ("qty", "qty"), ("buy", "avg cost"), ("last", "last"), ("pnl", "p&amp;l"), ("rs", "₹"),
+                          ("gap", "to stop"), ("worst", "worst so far"), ("days", "days"), ("then", "label at buy"),
+                          ("now", "label now"), ("sig", "signal")], numeric={"qty", "buy", "last", "pnl", "rs", "gap", "worst", "days"}))
+        show('<div class="note">to stop = how far the price can fall before the −20% rule says sell · worst so far = the deepest '
+             'it has been below your cost · label at buy = what the scan said the day you bought (same rules, that day\'s data)</div>')
+
+    # ---- insights
+    cards = trade_insights(t, o, open_value)
+    if cards:
+        sec("what your trades say", "measured from your own ledger · the parts a broker statement leaves out")
+        show('<div class="nx">' + "".join(f'<div class="nxi {k}">{esc(h)}<span>{esc(d)}</span></div>' for k, h, d in cards) + "</div>")
+
+    # ---- charts + history
+    if len(t):
+        sec("every closed trade", "colour = what the scan said the day you bought · hover for details")
+        c1, c2 = st.columns([3, 2], gap="large")
+        c1.plotly_chart(viz.trade_results(t), width="stretch", config=PLOT)
+        with c2:
+            show('<div class="meta">days held vs result · bubble size = money in the trade</div>')
+            st.plotly_chart(viz.hold_vs_return(t, rising.STOP_PCT), width="stretch", config=PLOT)
+        rows = [dict(sym=f"<b>{esc(r.symbol)}</b>", b=f"{r.entry:%d %b}", s=f"{r.exit:%d %b}", d=f"{r.days}",
+                     ab=num(r.avg_buy, 2), as_=num(r.avg_sell, 2), ret=pct(r.ret, 1), pnl=f"₹{r.pnl:+,.0f}",
+                     lab=status(r.label) if r.label in STATUS_C else f'<span class="dim">{esc(r.label)}</span>',
+                     w=pct(r.worst, 1), a=pct(r.after, 1)) for r in t.sort_values("exit", ascending=False).itertuples()]
+        show(table(rows, [("sym", "symbol"), ("b", "bought"), ("s", "sold"), ("d", "days"), ("ab", "avg buy"), ("as_", "avg sell"),
+                          ("ret", "return"), ("pnl", "₹"), ("lab", "label at buy"), ("w", "worst while held"), ("a", "since sold")],
+                   numeric={"d", "ab", "as_", "ret", "pnl", "w", "a"}))
+
+    # ---- manage
+    sec("trades", "everything above is computed from this ledger · sold stocks leave your positions on their own")
+    a1, a2 = st.columns(2, gap="large")
+    with a1.form("add_trade", clear_on_submit=True):
+        show('<div class="meta">add a buy or a sell</div>')
+        f1, f2 = st.columns(2)
+        side = f1.segmented_control("side", ["buy", "sell"], default="buy", key="pf_side") or "buy"
+        when = f2.date_input("date", value=pd.Timestamp.now().date(), max_value=pd.Timestamp.now().date())
+        sym_opts = list(o.symbol) + [s for s in all_symbols() if s not in set(o.symbol)]
+        sym = st.selectbox("symbol", sym_opts, index=None, placeholder="type a symbol")
+        f3, f4 = st.columns(2)
+        qty = f3.number_input("quantity", min_value=1, step=1, value=1)
+        price = f4.number_input("price ₹", min_value=0.01, step=0.05, value=None, placeholder="fill price")
+        note = st.text_input("why you're buying (optional, buys only)")
+        if st.form_submit_button("save trade", width="stretch"):
+            held = dict(zip(o.symbol, o.qty))
+            if not sym or not price:
+                st.error("pick a symbol and enter the price")
+            elif side == "sell" and qty > held.get(sym, 0):
+                st.error(f"you hold {held.get(sym, 0):g} {sym} — can't sell {qty}")
+            else:
+                pf.add_trade(side, sym, qty, price, when)
+                if side == "buy" and note.strip():
+                    pf.save_notes({**nts, sym: note.strip()})
+                    snapshot_thesis(sym, note.strip())
+                st.rerun()
+    with a2:
+        show('<div class="meta">import your broker tradebook (Zerodha xlsx/csv, or any csv with '
+             'symbol, date, side, qty, price) — trades already in the ledger are skipped</div>')
+        up = st.file_uploader("tradebook", type=["xlsx", "xls", "csv"], label_visibility="collapsed")
+        if up is not None and st.button("import", width="stretch"):
+            try:
+                n = pf.merge(pf.parse_tradebook(up))
+                st.success(f"{n} new trade{'s' if n != 1 else ''} added")
+                st.rerun()
+            except Exception as e:
+                st.error(f"couldn't read that file: {str(e)[:200]}")
+        ign = st.text_input("keep out of the portfolio (symbols)", " ".join(sorted(pf.ignored())),
+                            help="e.g. a stock bought only for an IPO shareholder quota")
+        if " ".join(sorted(ign.upper().split())) != " ".join(sorted(pf.ignored())):
+            pf.set_ignored(ign.split())
+            st.rerun()
+    if len(o):
+        with st.expander("why I bought — notes for open positions (checked every quarter on the today tab)"):
+            ed = st.data_editor(pd.DataFrame({"symbol": list(o.symbol), "why I bought": [nts.get(s, "") for s in o.symbol]}),
+                                disabled=["symbol"], hide_index=True, width="stretch", key="pf_notes")
+            if st.button("save notes"):
+                new = {**nts, **{r["symbol"]: str(r["why I bought"] or "").strip() for _, r in ed.iterrows()}}
+                pf.save_notes(new)
+                for s_, th in new.items():
+                    if th and s_ in set(o.symbol):
+                        snapshot_thesis(s_, th)
+                st.rerun()
+    with st.expander(f"ledger — {len(led)} trades (fix or delete a row here)"):
+        full = pf.load(include_ignored=True)
+        ed = st.data_editor(full.assign(date=full.date.dt.date), num_rows="dynamic", hide_index=True, width="stretch", key="pf_ledger",
+                            column_config={"side": st.column_config.SelectboxColumn("side", options=["buy", "sell"]),
+                                           "date": st.column_config.DateColumn("date")})
+        if st.button("save ledger"):
+            pf.save(ed.dropna(subset=["symbol", "qty", "price"]).assign(symbol=lambda d: d.symbol.str.upper().str.strip()))
+            st.rerun()
+
+
+if in_pf:
+    portfolio_page()
+    st.stop()
 
 t_today, t_board, t_stock, t_cmp, t_sec, t_fil, t_watch, t_hist = st.tabs(
     ["today", "board", "stock", "compare", "themes", "filings", "watchlist", "scoreboard"])
@@ -710,24 +936,13 @@ with t_today:
                          pnl=pct(last / p.buy_price - 1, 1), stop=num(p.buy_price * (1 - rising.STOP_PCT), 2),
                          review=f'{pd.Timestamp(p.buy_date) + pd.Timedelta(days=rising.REVIEW_DAYS):%d %b %y}',
                          st=status(stt) if stt != "–" else '<span class="dim">off board</span>', sig=sig))
-    sec("positions", f"value ₹{value:,.0f} · invested ₹{invested:,.0f} · {pct(value / invested - 1, 1) if invested else ''}")
+    sec("open positions", f"value ₹{value:,.0f} · invested ₹{invested:,.0f} · {pct(value / invested - 1, 1) if invested else ''}")
     if exits:
         show(f'<div class="flag">exit rule hit: <b>{", ".join(exits)}</b> — sell next session</div>')
     show(table(rows, [("sym", "symbol"), ("qty", "qty"), ("buy", "buy"), ("last", "last"), ("pnl", "p&amp;l"),
                       ("stop", "stop −20%"), ("review", "6m review"), ("st", "status"), ("sig", "signal")],
                numeric={"qty", "buy", "last", "pnl", "stop"}))
-    with st.expander("edit positions"):
-        edited = st.data_editor(pos, num_rows="dynamic", width="stretch", key="pos_editor",
-                                column_config={"buy_date": st.column_config.TextColumn("buy_date (YYYY-MM-DD)"),
-                                               "thesis": st.column_config.TextColumn("why I bought (one line)", width="large")})
-        if st.button("save positions"):
-            edited = edited.dropna(subset=["symbol"]).assign(symbol=lambda d: d.symbol.str.upper().str.strip(),
-                                                             thesis=lambda d: d.thesis.fillna("").astype(str))
-            save_csv(edited, POS, index=False)
-            for r_ in edited.itertuples():
-                if r_.thesis.strip():
-                    snapshot_thesis(r_.symbol, r_.thesis.strip())
-            st.rerun()
+    show('<div class="note">open trades only · add, sell or import trades and see your full record in <b>portfolio</b> (top right)</div>')
 
     # thesis health: the growth check when you bought vs now
     rows_t = []
@@ -750,7 +965,7 @@ with t_today:
         sec("thesis health", "growth check when you bought vs now · each dot is one check (green pass · amber watch · red fail)")
         show(table(rows_t, [("sym", "symbol"), ("th", "why you bought"), ("then", "then"), ("now", "now"), ("v", "verdict")]))
     elif len(pos):
-        show('<div class="note">tip: add "why I bought" in <b>edit positions</b> — the app will tell you each quarter whether that reason still holds</div>')
+        show('<div class="note">tip: add "why I bought" in <b>portfolio</b> — the app will tell you each quarter whether that reason still holds</div>')
     for s in pos.symbol:
         c = brief.latest_cached(s)
         if c and (pd.Timestamp.now().date() - c[0]).days <= 7:
