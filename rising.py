@@ -429,6 +429,10 @@ def _update():
     print("3/3 scan")
     out = scan()
     import portfolio
+    try:
+        portfolio.refresh_actions(set(portfolio.load(actions=False).symbol))  # bonuses/splits change share counts
+    except Exception as e:
+        print(f"   corporate actions skipped: {e}")
     opened = portfolio.open_positions()
     held = list(opened.symbol)
     watch = (DATA / "watchlist.txt").read_text().split() if (DATA / "watchlist.txt").exists() else []

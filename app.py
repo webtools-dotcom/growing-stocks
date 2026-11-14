@@ -102,6 +102,7 @@ label p {{ font-size: .74rem !important; color: {C['dim']} !important; }}
 .gres {{ align-self: center; border: 1px solid; padding: .9rem 1.1rem; font-weight: 600; letter-spacing: .16em; font-size: .85rem; }}
 .nx {{ display: flex; gap: .5rem; flex-wrap: wrap; margin: 0 0 .4rem; }}
 .nxi {{ border: 1px solid {C['line']}; padding: .4rem .7rem; font-size: .76rem; background: #12130e; }}
+.nx.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); }}
 .nxi span {{ display: block; color: {C['dim']}; font-size: .68rem; margin-top: .1rem; }}
 .nxi.up {{ border-left: 2px solid {C['green']}; }} .nxi.down {{ border-left: 2px solid {C['red']}; }}
 .nxi.watch {{ border-left: 2px solid {C['amber']}; }}
@@ -563,8 +564,9 @@ UPDATE_LOG = DATA / "update.log"
 
 
 def run_update():
-    """Start the update as its own process writing to data/update.log, then follow it. The page only reads the log,
-    so reloading or closing the page can't break the update (a page-bound pipe did: OSError 22 on Windows)."""
+    """Start the update as its own process writing to data/update.log. The page never waits on it: a small progress
+    box refreshes itself (update_progress) while the rest of the app stays usable, and reloading or closing the page
+    can't break the update."""
     if not rising.update_running():
         import time
         with open(UPDATE_LOG, "w", encoding="utf-8") as log:
@@ -573,27 +575,23 @@ def run_update():
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         while p.poll() is None and not rising.update_running():  # wait for the update to mark itself running
             time.sleep(.2)
-    follow_update()
+    st.session_state["upd_watch"] = True
 
 
-def follow_update():
-    import time
-    with st.status("updating — prices, filings, new results, scan", expanded=True) as s:
-        seen = 0
-        while True:
-            running = rising.update_running()
-            lines = UPDATE_LOG.read_text(encoding="utf-8", errors="replace").splitlines() if UPDATE_LOG.exists() else []
-            for line in lines[seen:]:
-                if line.strip() and "litellm" not in line.lower():
-                    s.write(line)
-            seen = len(lines)
-            if not running:
-                break
-            time.sleep(1)
-        ok = read_json(DATA / "sync_state.json", {}).get("ok", False)
-        s.update(label="done" if ok else "update failed — see log above", state="complete" if ok else "error")
-    st.cache_data.clear()
-    st.rerun()
+@st.fragment(run_every="2s")
+def update_progress():
+    """Progress of a running update, refreshed on its own every 2 s; when it finishes, reload the app's data."""
+    if rising.update_running():
+        st.session_state["upd_watch"] = True
+        lines = [ln for ln in (UPDATE_LOG.read_text(encoding="utf-8", errors="replace").splitlines() if UPDATE_LOG.exists() else [])
+                 if ln.strip() and "litellm" not in ln.lower()]
+        show(f'<div class="flag warn">updating — <b>{esc(lines[-1].strip() if lines else "starting…")}</b>'
+             '<br><span class="dim">keep using the app; the data reloads by itself when the update finishes</span></div>')
+        with st.expander("update log"):
+            st.code("\n".join(lines[-60:]) or "starting…", language=None)
+    elif st.session_state.pop("upd_watch", False):
+        st.cache_data.clear()
+        st.rerun(scope="app")
 
 
 @st.dialog("settings", width="large")
@@ -643,6 +641,7 @@ if b.empty:
     left.markdown('<div class="brand">RISING<span class="dim"> // nse growth terminal</span></div>', unsafe_allow_html=True)
     if right.button("update data", width="stretch"):
         run_update()
+    update_progress()
     show('<div class="flag warn">no data yet — click <b>update data</b>.<br><span class="dim">the first run downloads ~1.5 years of '
          'NSE prices and the results of every liquid company (~1,200) from public sources: about 30 minutes, once. '
          'after that a daily update takes about a minute. no API key needed.</span></div>')
@@ -654,10 +653,12 @@ counts = " · ".join(f'{status(s)} <b>{int(cnt.get(s, 0))}</b>' for s in STATUSE
 left.markdown(f'<div class="bar"><div class="brand">RISING<span class="dim"> // nse growth terminal</span></div>'
               f'<div class="meta">data {asof:%a %d %b %Y} &nbsp;·&nbsp; {counts}</div></div>', unsafe_allow_html=True)
 if right.button("update data", width="stretch", help="prices + NSE filings + new results + rescan (≈1–10 min)",
-                disabled=rising.update_running()) or rising.update_running():
-    run_update()  # also re-attaches to an update that is already running (page reloaded mid-update)
-show('<div class="legend">leader = growing + already ran 80–150% · hot = ran &gt;150%, not a buy · emerging = growth accelerating, price confirmed · '
-     'wait = watch only, buy above trigger · exit = −20% stop or 6-month review · research tool, not advice</div>')
+                disabled=rising.update_running()):
+    run_update()
+update_progress()  # shows a running update (also one started elsewhere: scheduled task, another window)
+if not in_pf:
+    show('<div class="legend">leader = growing + already ran 80–150% · hot = ran &gt;150%, not a buy · emerging = growth accelerating, price confirmed · '
+         'wait = watch only, buy above trigger · exit = −20% stop or 6-month review · research tool, not advice</div>')
 
 # Freshness: NSE publishes a trading day's file ~6–8 pm IST. New data can exist once 7 pm has passed on the next
 # weekday after the board's date. If an update already checked NSE after that moment and found nothing (holiday,
@@ -668,7 +669,7 @@ kind, when = rising.freshness(asof, state, pd.Timestamp.now())
 if kind == "failed":
     show(f'<div class="flag">last update failed{f" ({when:%d %b %H:%M})" if when is not None else ""}: {esc(state.get("error", ""))}<br>'
          '<span class="dim">the board still shows older data. click <b>update data</b> to retry.</span></div>')
-elif kind == "stale":
+elif kind == "stale" and not rising.update_running():
     show(f'<div class="flag warn">newer market data may be out ({when:%a %d %b}) — click <b>update data</b></div>')
 
 excl = st.session_state.get("excl", [i for i in DEFAULT_EXCLUDE if i in set(b.industry.dropna())])
@@ -767,6 +768,7 @@ def trade_insights(t, o, open_value):
 
 
 def portfolio_page():
+    pf.refresh_actions(set(pf.load(actions=False).symbol))  # bonuses/splits from NSE, once a day per stock
     led = pf.load()
     o = pf.open_positions(led)
     nts = pf.notes()
@@ -827,7 +829,7 @@ def portfolio_page():
     cards = trade_insights(t, o, open_value)
     if cards:
         sec("what your trades say", "measured from your own ledger · the parts a broker statement leaves out")
-        show('<div class="nx">' + "".join(f'<div class="nxi {k}">{esc(h)}<span>{esc(d)}</span></div>' for k, h, d in cards) + "</div>")
+        show('<div class="nx grid">' + "".join(f'<div class="nxi {k}">{esc(h)}<span>{esc(d)}</span></div>' for k, h, d in cards) + "</div>")
 
     # ---- charts + history
     if len(t):
@@ -848,7 +850,7 @@ def portfolio_page():
     # ---- manage
     sec("trades", "everything above is computed from this ledger · sold stocks leave your positions on their own")
     a1, a2 = st.columns(2, gap="large")
-    with a1.form("add_trade", clear_on_submit=True):
+    with a1.form(f"add_trade_{st.session_state.get('form_n', 0)}"):  # new key after a save = empty form; errors keep input
         show('<div class="meta">add a buy or a sell</div>')
         f1, f2 = st.columns(2)
         side = f1.segmented_control("side", ["buy", "sell"], default="buy", key="pf_side") or "buy"
@@ -857,7 +859,7 @@ def portfolio_page():
         sym = st.selectbox("symbol", sym_opts, index=None, placeholder="type a symbol")
         f3, f4 = st.columns(2)
         qty = f3.number_input("quantity", min_value=1, step=1, value=1)
-        price = f4.number_input("price ₹", min_value=0.01, step=0.05, value=None, placeholder="fill price")
+        price = f4.number_input("price ₹", min_value=0.01, step=0.01, value=None, placeholder="fill price")
         note = st.text_input("why you're buying (optional, buys only)")
         if st.form_submit_button("save trade", width="stretch"):
             held = dict(zip(o.symbol, o.qty))
@@ -867,6 +869,7 @@ def portfolio_page():
                 st.error(f"you hold {held.get(sym, 0):g} {sym} — can't sell {qty}")
             else:
                 pf.add_trade(side, sym, qty, price, when)
+                st.session_state["form_n"] = st.session_state.get("form_n", 0) + 1
                 if side == "buy" and note.strip():
                     pf.save_notes({**nts, sym: note.strip()})
                     snapshot_thesis(sym, note.strip())
@@ -899,7 +902,7 @@ def portfolio_page():
                         snapshot_thesis(s_, th)
                 st.rerun()
     with st.expander(f"ledger — {len(led)} trades (fix or delete a row here)"):
-        full = pf.load(include_ignored=True)
+        full = pf.load(include_ignored=True, actions=False)
         ed = st.data_editor(full.assign(date=full.date.dt.date), num_rows="dynamic", hide_index=True, width="stretch", key="pf_ledger",
                             column_config={"side": st.column_config.SelectboxColumn("side", options=["buy", "sell"]),
                                            "date": st.column_config.DateColumn("date")})

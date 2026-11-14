@@ -3,6 +3,8 @@ behaviour come from it, so a sold stock leaves your positions on its own. Everyt
 
 The analytics answer what a broker statement doesn't: did your picks follow the system, did you respect your stop,
 what happened after you sold, how long you hold winners vs losers, and how much charges eat out of small trades."""
+import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +17,7 @@ LEDGER = DATA / "trades.csv"
 NOTES = DATA / "notes.csv"              # symbol -> why you bought (thesis)
 IGNORE = DATA / "portfolio_ignore.txt"  # symbols kept out of the portfolio (e.g. an IPO-quota buy)
 ENTRY_CACHE = DATA / "entry_context.json"
+CORP = DATA / "corp_actions.json"       # bonuses and splits per symbol, from NSE (refreshed daily for held stocks)
 COLS = ["date", "time", "symbol", "side", "qty", "price", "exchange", "trade_id", "source"]
 DP_CHARGE = 15.34  # depository charge per scrip per sell day (Zerodha: ₹13 + GST); edit if your broker differs
 
@@ -28,7 +31,9 @@ def set_ignored(symbols):
     save_text(IGNORE, "\n".join(sorted({s.strip().upper() for s in symbols if s.strip()})))
 
 
-def load(include_ignored=False):
+def load(include_ignored=False, actions=True):
+    """The ledger. actions=True also inserts bonuses and splits (side "adjust", qty = factor) at their ex-date, so
+    positions come out in today's share count and cost; the saved ledger only ever holds real trades."""
     d = pd.read_csv(LEDGER, dtype={"trade_id": str, "time": str}) if Path(LEDGER).exists() else pd.DataFrame(columns=COLS)
     d = d.reindex(columns=COLS)
     d["date"] = pd.to_datetime(d.date)
@@ -36,11 +41,61 @@ def load(include_ignored=False):
     d["qty"], d["price"] = pd.to_numeric(d.qty), pd.to_numeric(d.price)
     if not include_ignored:
         d = d[~d.symbol.isin(ignored())]
+    if actions and len(d):
+        d = with_actions(d)
     return d.sort_values(["date", "time"], kind="stable").reset_index(drop=True)
 
 
+def _factor(subject):
+    """NSE corporate-action text -> (share multiplier, kind) for bonuses and splits, else (None, None).
+    'Bonus 3:2' = 3 new for every 2 held -> x2.5; 'Split ... From Rs 10/- ... To Re 1/-' -> x10."""
+    s = str(subject).lower()
+    m = re.search(r"bonus\s*(\d+)\s*:\s*(\d+)", s)
+    if m and int(m.group(2)):
+        return (int(m.group(1)) + int(m.group(2))) / int(m.group(2)), "bonus"
+    m = re.search(r"from\s*r[se]\.?\s*([\d.]+)\D+?to\s*r[se]\.?\s*([\d.]+)", s)
+    if ("split" in s or "sub-division" in s) and m and float(m.group(2)):
+        return float(m.group(1)) / float(m.group(2)), "split"
+    return None, None
+
+
+def refresh_actions(symbols, max_age_days=1):
+    """Fetch bonuses/splits from NSE for `symbols` (cached in data/corp_actions.json; re-fetched after a day)."""
+    cache, today, s = read_json(CORP, {}), pd.Timestamp.now().date(), None
+    for sym in sorted(set(symbols)):
+        e = cache.get(sym)
+        if e and (today - pd.Timestamp(e["fetched"]).date()).days < max_age_days:
+            continue
+        try:
+            if s is None:
+                from config import nse_session
+                s = nse_session()
+            items = s.get(f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&symbol={sym}", timeout=20).json()
+        except Exception:
+            continue  # offline / blocked: keep what we had
+        acts = []
+        for x in items if isinstance(items, list) else []:
+            f, kind = _factor(x.get("subject", ""))
+            ex = pd.to_datetime(x.get("exDate"), format="%d-%b-%Y", errors="coerce")
+            if f and pd.notna(ex) and f != 1:
+                acts.append(dict(ex=str(ex.date()), factor=f, kind=kind, subject=x.get("subject")))
+        cache[sym] = dict(fetched=str(today), actions=acts)
+    save_json(CORP, cache)
+    return cache
+
+
+def with_actions(d):
+    """Insert cached bonuses/splits that fall after a symbol's first trade as 'adjust' rows (no network)."""
+    cache = read_json(CORP, {})
+    first = d.groupby("symbol").date.min()
+    rows = [dict(date=pd.Timestamp(a["ex"]), time="00:00:00", symbol=s, side="adjust", qty=a["factor"], price=np.nan,
+                 exchange="", trade_id=None, source=a["kind"])
+            for s, t0 in first.items() for a in cache.get(s, {}).get("actions", []) if pd.Timestamp(a["ex"]) > t0]
+    return pd.concat([d, pd.DataFrame(rows, columns=COLS)], ignore_index=True) if rows else d
+
+
 def save(d):
-    d = d.reindex(columns=COLS).copy()
+    d = d[d.side.isin(["buy", "sell"])].reindex(columns=COLS).copy()  # bonuses/splits are derived, never stored
     d["date"] = pd.to_datetime(d.date).dt.date
     save_csv(d.sort_values(["date", "time"], kind="stable"), LEDGER, index=False)
 
@@ -72,7 +127,8 @@ def parse_tradebook(src):
 def merge(new):
     """Add tradebook rows to the ledger without duplicates (by broker trade id, else by every field).
     Returns how many rows were new."""
-    old = load(include_ignored=True)
+    old = load(include_ignored=True, actions=False)
+
     def key(d):  # built row by row: an empty ledger's columns carry no string type
         parts = [d.trade_id.fillna("").astype(str), d.symbol.astype(str), d.side.astype(str),
                  pd.to_datetime(d.date).dt.strftime("%Y-%m-%d").astype(str), d.qty.astype(float).astype(str),
@@ -88,7 +144,7 @@ def merge(new):
 def add_trade(side, symbol, qty, price, date):
     d = pd.DataFrame([dict(date=pd.Timestamp(date), time=pd.Timestamp.now().strftime("%H:%M:%S"), symbol=symbol.strip().upper(),
                            side=side, qty=float(qty), price=float(price), exchange="NSE", trade_id=None, source="manual")])
-    save(pd.concat([load(include_ignored=True), d], ignore_index=True))
+    save(pd.concat([load(include_ignored=True, actions=False), d], ignore_index=True))
 
 
 def notes():
@@ -121,6 +177,16 @@ def fifo(d):
     lots, closed, over = {}, [], []
     for r in d.itertuples():
         q = lots.setdefault(r.symbol, [])
+        if r.side == "adjust":  # bonus/split: more shares, same total cost; a bonus only credits whole shares
+            held = sum(x[1] for x in q)
+            for x in q:
+                x[1], x[2] = x[1] * r.qty, x[2] / r.qty
+            if r.source == "bonus" and q:  # the fraction is paid out in cash: keep total cost over the whole shares
+                cost = sum(x[1] * x[2] for x in q)
+                q[-1][1] -= held * r.qty - math.floor(held * r.qty + 1e-9)
+                rest = sum(x[1] * x[2] for x in q[:-1])
+                q[-1][2] = (cost - rest) / q[-1][1] if q[-1][1] > 1e-9 else q[-1][2]
+            continue
         if r.side == "buy":
             q.append([r.date, r.qty, r.price])
             continue
@@ -150,31 +216,38 @@ def open_positions(d=None):
 
 
 def round_trips(d=None):
-    """One row per trade from flat to flat: first buy, last sell, average prices, P&L, days held."""
+    """One row per trade from flat to flat: first buy, last sell, average prices, P&L, days held. Tracks the cost of
+    the shares actually held, so a bonus or split during the trade keeps the P&L right."""
     d = load() if d is None else d
     rows, state = [], {}
     for r in d.itertuples():
-        s = state.setdefault(r.symbol, dict(pos=0.0, bq=0.0, bv=0.0, sq=0.0, sv=0.0, entry=None, buys=set()))
+        s = state.setdefault(r.symbol, dict(pos=0.0, cost=0.0, bv=0.0, rc=0.0, sq=0.0, sv=0.0, entry=None, buys=set()))
+        if r.side == "adjust":
+            if s["entry"] is not None:
+                s["pos"] = math.floor(s["pos"] * r.qty + 1e-9) if r.source == "bonus" else s["pos"] * r.qty
+            continue
         if r.side == "buy":
             if s["pos"] <= 1e-9:
-                s.update(pos=0.0, bq=0.0, bv=0.0, sq=0.0, sv=0.0, entry=r.date, buys=set())
+                s.update(pos=0.0, cost=0.0, bv=0.0, rc=0.0, sq=0.0, sv=0.0, entry=r.date, buys=set())
             s["pos"] += r.qty
-            s["bq"] += r.qty
+            s["cost"] += r.qty * r.price
             s["bv"] += r.qty * r.price
             s["buys"].add(r.date)  # one order filled in pieces is one buy; another day is an add
-        else:
-            if s["entry"] is None:
-                continue
-            q = min(r.qty, s["pos"])
-            s["pos"] -= q
-            s["sq"] += q
-            s["sv"] += q * r.price
-            if s["pos"] <= 1e-9:
-                ab = s["bv"] / s["bq"]
-                rows.append(dict(symbol=r.symbol, entry=s["entry"], exit=r.date, qty=s["sq"], avg_buy=ab, avg_sell=s["sv"] / s["sq"],
-                                 invested=s["bv"], pnl=s["sv"] - s["sq"] * ab, ret=s["sv"] / (s["sq"] * ab) - 1,
-                                 days=(r.date - s["entry"]).days, adds=len(s["buys"]) - 1))
-                s["entry"] = None
+            continue
+        if s["entry"] is None:
+            continue
+        q = min(r.qty, s["pos"])
+        avg = s["cost"] / s["pos"]
+        s["rc"] += q * avg
+        s["cost"] -= q * avg
+        s["pos"] -= q
+        s["sq"] += q
+        s["sv"] += q * r.price
+        if s["pos"] <= 1e-9:
+            rows.append(dict(symbol=r.symbol, entry=s["entry"], exit=r.date, qty=s["sq"], avg_buy=s["rc"] / s["sq"],
+                             avg_sell=s["sv"] / s["sq"], invested=s["bv"], pnl=s["sv"] - s["rc"], ret=s["sv"] / s["rc"] - 1,
+                             days=(r.date - s["entry"]).days, adds=len(s["buys"]) - 1))
+            s["entry"] = None
     return pd.DataFrame(rows, columns=["symbol", "entry", "exit", "qty", "avg_buy", "avg_sell", "invested", "pnl", "ret", "days", "adds"])
 
 
@@ -182,6 +255,7 @@ def costs(d=None, dp=DP_CHARGE):
     """Estimated charges for Indian equity delivery (intraday where bought and sold the same day): STT, exchange
     and SEBI fees, stamp duty, GST, plus a DP charge per scrip per sell day. Zero brokerage (discount broker)."""
     d = load() if d is None else d
+    d = d[d.side.isin(["buy", "sell"])]
     if d.empty:
         return 0.0
     v = d.qty * d.price
@@ -296,4 +370,12 @@ if __name__ == "__main__":  # self-check on a synthetic ledger
     assert open_positions(led2).set_index("symbol").qty.to_dict() == {"C": 3}
     c = costs(led)
     assert 15.34 * 2 < c < 15.34 * 2 + 15, c   # two delivery sell days of A (B was intraday: no DP charge)
+    bon = pd.DataFrame([T("2026-11-03", "15:26", "P", "buy", 7, 148.76),
+                        dict(date=pd.Timestamp("2026-11-13"), time="00:00:00", symbol="P", side="adjust", qty=2.5, price=np.nan,
+                             exchange="", trade_id=None, source="bonus")])
+    pb = open_positions(bon).iloc[0]
+    assert pb.qty == 17 and abs(pb.buy_price - 7 * 148.76 / 17) < .01, pb   # 7 + 10 bonus (half share paid in cash)
+    sp = pd.concat([bon, pd.DataFrame([T("2026-11-20", "10:00", "P", "sell", 17, 70)])], ignore_index=True)
+    assert abs(round_trips(sp).pnl.iloc[0] - (17 * 70 - 7 * 148.76)) < .01
+    assert _factor("Bonus 3:2") == (2.5, "bonus") and _factor("Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share") == (10, "split")
     print("portfolio ok")
