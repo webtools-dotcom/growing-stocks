@@ -286,7 +286,8 @@ python data_sync.py backfill 1650
 ## Daily workflow
 
 1. **After 7 pm IST** (when NSE publishes the day's file), click **update data** — or schedule `daily_update.bat`
-   in Windows Task Scheduler. The update runs on its own, so you can close or reload the page while it works.
+   in Windows Task Scheduler. The update runs on its own, so you can close or reload the page while it works, and it
+   saves as it goes: if the laptop sleeps, crashes or you quit mid-update, the next update picks up where it stopped.
 2. Open **today** — positions against the exit rule, what changed on the board, results this week, red flags.
 3. Open **board** — new leaders and emerging names, best-ordered first.
 4. Open any name on the **stock** page — read the snapshot, check how it was ranked, look at the growth story.

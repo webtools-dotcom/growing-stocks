@@ -77,9 +77,23 @@ def fetch(sym):
     return None, None
 
 
-def refresh(syms, pause=1.2, log=print):
+def _save(metas, qs):
+    """Merge fetched companies into the caches (replacing their old rows); crash-safe file swap."""
+    done = {m["symbol"] for m in metas}
+    old_m = pd.read_csv(META_CACHE) if META_CACHE.exists() else pd.DataFrame()
+    old_q = pd.read_csv(Q_CACHE, parse_dates=["quarter_end"]) if Q_CACHE.exists() else pd.DataFrame()
+    if len(old_m):
+        old_m = old_m[~old_m.symbol.isin(done)]
+        old_q = old_q[~old_q.symbol.isin(done)]
+    pd.concat([old_m, pd.DataFrame(metas)]).pipe(save_csv, META_CACHE, index=False)
+    pd.concat([old_q, *qs]).pipe(save_csv, Q_CACHE, index=False)
+
+
+def refresh(syms, pause=1.2, every=25, log=print):
+    """Fetch each symbol and save progress every `every` companies, so a crash, sleep or closed laptop mid-run loses
+    at most that many: the next update skips companies already fetched since their latest results."""
     DATA.mkdir(exist_ok=True)
-    metas, qs = [], []
+    metas, qs, saved = [], [], 0
     for i, s in enumerate(syms, 1):
         try:
             m, q = fetch(s)
@@ -89,20 +103,14 @@ def refresh(syms, pause=1.2, log=print):
         if m:
             metas.append(m)
             qs.append(q)
-        if i % 25 == 0:
-            log(f"screener {i}/{len(syms)}")
+        if i % every == 0 or i == len(syms):
+            if metas:
+                _save(metas, qs)
+                saved += len(metas)
+                metas, qs = [], []
+            log(f"screener {i}/{len(syms)} · saved")
         time.sleep(pause)
-    if not metas:
-        return 0
-    done = {m["symbol"] for m in metas}
-    old_m = pd.read_csv(META_CACHE) if META_CACHE.exists() else pd.DataFrame()
-    old_q = pd.read_csv(Q_CACHE, parse_dates=["quarter_end"]) if Q_CACHE.exists() else pd.DataFrame()
-    if len(old_m):
-        old_m = old_m[~old_m.symbol.isin(done)]
-        old_q = old_q[~old_q.symbol.isin(done)]
-    pd.concat([old_m, pd.DataFrame(metas)]).pipe(save_csv, META_CACHE, index=False)
-    pd.concat([old_q, *qs]).pipe(save_csv, Q_CACHE, index=False)
-    return len(metas)
+    return saved
 
 
 if __name__ == "__main__":
