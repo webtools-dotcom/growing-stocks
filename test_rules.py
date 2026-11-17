@@ -113,3 +113,16 @@ _c.execute("create table daily_market (isin varchar, trade_date date, close doub
 _c.executemany("insert into daily_market values (?, ?, ?)", _rows)
 assert suspect_days(_c) == [_d[2].date()], suspect_days(_c)
 print("bad-day detector ok")
+
+# older Upstox candles join Rising's: rescaled by the overlap (a 1:2 split since), refused across a hole
+from breakouts import stitch  # noqa: E402
+
+dt = pd.bdate_range("2022-01-03", periods=60)
+new = pd.DataFrame(dict(date=dt[30:], open=50.0, high=51.0, low=49.0, close=50.0, volume=200.0))
+old = pd.DataFrame(dict(date=dt[:50], open=100.0, high=102.0, low=98.0, close=100.0, volume=100.0))
+s = stitch(old, new)
+assert len(s) == 60 and s.close.iloc[0] == 50 and s.volume.iloc[0] == 200 and s.date.is_monotonic_increasing
+gap = pd.concat([old.head(5), old[old.date >= dt[30]]])  # old stops 5 weeks before the seam
+assert len(stitch(gap.assign(date=list(dt[:5] - pd.Timedelta(days=60)) + list(gap.date[5:])), new)) == 30
+assert len(stitch(old.assign(close=[100.0, 300.0] * 25), new)) == 30  # sources disagree: new only
+print("stitch ok")

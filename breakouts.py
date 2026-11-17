@@ -13,7 +13,8 @@ Grades come from the lab's 20-year backtest (breakout_evidence.json, 112,311 bre
      (86% made money, 9% hit the stop, +6.9% vs market — 22 cases since 2023, a small sample)
   B  any box breakout (57% made money, 17% stopped) or a long base tested 4+ times
   C  everything else: trendline and swing-line breakouts lost to the typical stock in every split tested
-Rising's own price history starts in 2022, so long bases here are at most ~4.5 years (the lab saw up to 16)."""
+Rising's NSE prices start in 2022; run long_history.py once to add Upstox candles back to 2006, so long bases can
+span up to 16 years (stitched in daily(); without it, bases are at most ~4.5 years)."""
 import json
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -287,19 +288,43 @@ def daily(symbols=None):
     from data_sync import adjust_prices
     c = open_db()
     try:
-        q = """select i.symbol, d.trade_date date, d.open, d.high, d.low, d.close, d.volume from daily_market d
-               join instruments i using (isin)"""
-        d = (c.execute(q + " where i.symbol in (" + ",".join("?" * len(symbols)) + ")", list(symbols)).df() if symbols
-             else c.execute(q).df())
+        where = " where i.symbol in (" + ",".join("?" * len(symbols)) + ")" if symbols else ""
+        args = list(symbols or [])
+        d = c.execute("""select i.symbol, d.trade_date date, d.open, d.high, d.low, d.close, d.volume from daily_market d
+                         join instruments i using (isin)""" + where, args).df()
+        try:  # older Upstox candles, if long_history.py has been run
+            old = c.execute("""select i.symbol, l.date, l.open, l.high, l.low, l.close, l.volume from long_daily l
+                               join instruments i using (isin)""" + where, args).df()
+        except Exception:
+            old = pd.DataFrame(columns=d.columns)
     finally:
         c.close()
     d["date"] = pd.to_datetime(d.date)
+    old["date"] = pd.to_datetime(old.date)
+    old = dict(tuple(old.groupby("symbol")))
     out = {}
     for sym, g in d.sort_values("date").groupby("symbol"):
         g = g.drop_duplicates("date").reset_index(drop=True)
         f = adjust_prices(g.close) / g.close  # the same factor scales open/high/low
-        out[sym] = g.assign(open=g.open * f, high=g.high * f, low=g.low * f, close=g.close * f).dropna(subset=["close"])
+        g = g.assign(open=g.open * f, high=g.high * f, low=g.low * f, close=g.close * f).dropna(subset=["close"])
+        out[sym] = stitch(old[sym], g) if sym in old else g
     return out
+
+
+def stitch(old, new, n=20):
+    """Put older candles in front of Rising's, rescaled by the median price ratio over their first n shared days (this
+    absorbs any split since the old ones were fetched). Volume is scaled the other way. No clean overlap: new only."""
+    both = new.merge(old, on="date", suffixes=("", "_o")).head(n)
+    if len(both) < 5:
+        return new
+    ratio = (both.close / both.close_o).median()
+    if not ((both.close / both.close_o / ratio - 1).abs() < .03).mean() >= .8:  # the two sources disagree: don't guess
+        return new
+    old = old[old.date < new.date.iloc[0]].sort_values("date")
+    if old.empty or (new.date.iloc[0] - old.date.iloc[-1]).days > 10:  # a hole at the seam (e.g. a reused ISIN)
+        return new
+    old = old.assign(**{k: old[k] * ratio for k in ("open", "high", "low", "close")}, volume=old.volume / ratio)
+    return pd.concat([old, new], ignore_index=True)
 
 
 def scan(log=print):

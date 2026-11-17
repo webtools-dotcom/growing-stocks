@@ -128,6 +128,14 @@ On their own, breakouts trailed the typical stock. The exception — **grade A**
 Rising rates leader or emerging: 86% made money and only 9% hit the stop (22 cases since 2023, still a small sample).
 That's the same lesson as the rest of the app: growth plus a price confirmation beats either alone.
 
+**Longer bases (optional, once):** Rising's own prices start in 2022, so without more history a "long base" can
+span at most ~4.5 years. With a free Upstox analytics token in `.env` (`UPSTOX_ACCESS_TOKEN=...`), fetch daily
+candles back to 2006 (about 1.5 hours, resumable) and bases of up to 16 years show up — like Engineers India's:
+
+```bash
+python long_history.py
+```
+
 **Check a tip** — paste a tip from a group or newsletter; Rising reads the stock, CMP, stop and targets, draws them
 next to its own levels, and says how often similar setups reached that target before the stop.
 
@@ -323,6 +331,7 @@ python data_sync.py backfill 1650
 | Quarterly and annual results, balance sheet, cash flow, shareholding | Screener.in company pages | none |
 | Announcements, results calendar, insider trades, surveillance lists, industries | NSE public APIs and archives | none |
 | News headlines for red-flag alerts | Google News RSS | none |
+| Older prices for long chart bases (optional) | Upstox historical-candle API | free Upstox analytics token |
 | AI brief (optional) | your own LLM provider via litellm | yours |
 
 - Everything is stored locally in `data/` (a DuckDB database plus small cache files). **No market data is stored
@@ -389,11 +398,12 @@ flowchart TD
 | `brief.py` | Optional AI brief and daily red-flag alerts |
 | `portfolio.py` | Trade ledger, tradebook import, FIFO positions and round trips, cost estimates, entry-day labels |
 | `breakouts.py` | Box / base / trendline detectors, live scan, grades and plans; evidence in `breakout_evidence.json` |
+| `long_history.py` | Optional one-time fetch of 2006–2022 daily prices from Upstox, for long bases |
 | `tips.py` | Reads a pasted stock tip (symbol, CMP, buy range, stop, targets) |
 | `viz.py` | Every chart builder and the colour palette |
 | `research.py` | The 3-year study behind the labels and the steadiness score |
 | `exit_backtest.py` | The exit-rule backtest |
-| `test_rules.py` | Self-checks for the rules, the explainer, price adjustment, the freshness banner and update tracking |
+| `test_rules.py` | Self-checks for the rules, the explainer, price adjustment, the freshness banner, update tracking and the long-history join |
 | `config.py` / `safeio.py` / `settings.py` | Paths and database access, crash-safe file I/O, AI provider and key storage |
 | `launch.pyw` / `make_shortcut.py` / `daily_update.bat` | App window, desktop shortcut, scheduled update |
 
