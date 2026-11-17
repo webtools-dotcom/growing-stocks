@@ -1106,7 +1106,8 @@ def breakout_card(r):
     gl = r.get("growth_label")
     show(f'<div class="note" style="border-left:2px solid {C["amber"]};padding:.6rem .9rem;background:#12130e;color:{C["text"]};font-size:.8rem">'
          f'<b>{esc(breakouts.SETUP[r["setup"]])}</b> · <span class="{cls}">{gtxt}</span><br>'
-         f'close {num(r["close"], 2)} · trigger: close above <b>{num(r["trigger"], 2)}</b> ({pct(r["gap"], 1)} away) · '
+         f'close {num(r["close"], 2)} · trigger: close above <b>{num(r["trigger"], 2)}</b> '
+         f'({f"already {-r["gap"]:.1%} above" if r["gap"] < 0 else f"{r["gap"]:.1%} to go"}) · '
          f'stop {num(r["stop"], 2)} on a closing basis (risk {r["risk"]:.0%})<br>'
          f'targets {num(r["target1"], 2)} / {num(r["target2"], 2)} (typical / good outcome of past breakouts of this kind) · '
          f'reward÷risk {num(r["reward_risk"], 1)}'
@@ -1130,16 +1131,6 @@ with t_bo:
         v = bo[bo.grade.isin(grades) & bo.setup.isin(setups)]
         if fresh:
             v = v[v.symbol.isin(set(watch) | set(pos.symbol))]
-        sec("live setups", f"{len(v)} of {len(bo)} · gap = how far the trigger is above the close")
-        gcls = {"A": "up", "B": "am", "C": "dn"}
-        show(table([dict(g=f'<span class="{gcls[r.grade]}">{r.grade}</span>', sym=f"<b>{esc(r.symbol)}</b>",
-                         s=esc(breakouts.SETUP[r.setup]), c=num(r.close, 2), t=num(r.trigger, 2), gap=pct(r.gap, 1), stp=num(r.stop, 2),
-                         rk=f"{r.risk:.0%}", t1=num(r.target1, 2), rr=num(r.reward_risk, 1), vol=num(r.vol_ratio, 1),
-                         gl=status(r.growth_label) if isinstance(r.growth_label, str) else '<span class="dim">–</span>')
-                    for r in v.head(200).itertuples()],
-                   [("g", "grade"), ("sym", "symbol"), ("s", "setup"), ("c", "close"), ("t", "trigger"), ("gap", "gap"), ("stp", "stop"),
-                    ("rk", "risk"), ("t1", "target 1"), ("rr", "r÷r"), ("vol", "vol ×"), ("gl", "growth")],
-                   numeric={"c", "t", "gap", "stp", "rk", "t1", "rr", "vol"}))
         c1, c2 = st.columns([2, 3])
         pick = c1.selectbox("chart a setup", list(v.symbol.unique()), index=None, placeholder="pick a symbol from the list")
         if pick:
@@ -1151,6 +1142,18 @@ with t_bo:
             if len(d):
                 st.plotly_chart(viz.breakout_chart(d, TF[r["pattern"]], r), width="stretch", config=PLOT)
 
+        n_show = len(v) if st.toggle(f"show all {len(v)} setups", False) else min(30, len(v))
+        sec("live setups", f"{len(v)} of {len(bo)} · gap = how far the price must rise to the trigger, or how far above it already is")
+        gcls = {"A": "up", "B": "am", "C": "dn"}
+        show(table([dict(g=f'<span class="{gcls[r.grade]}">{r.grade}</span>', sym=f"<b>{esc(r.symbol)}</b>",
+                         s=esc(breakouts.SETUP[r.setup]), c=num(r.close, 2), t=num(r.trigger, 2),
+                         gap=(f'<span class="dim">{-r.gap:.1%} above</span>' if r.gap < 0 else f"{r.gap:.1%} to go"), stp=num(r.stop, 2),
+                         rk=f"{r.risk:.0%}", t1=num(r.target1, 2), rr=num(r.reward_risk, 1), vol=num(r.vol_ratio, 1),
+                         gl=status(r.growth_label) if isinstance(r.growth_label, str) else '<span class="dim">–</span>')
+                    for r in v.head(n_show).itertuples()],
+                   [("g", "grade"), ("sym", "symbol"), ("s", "setup"), ("c", "close"), ("t", "trigger"), ("gap", "gap"), ("stp", "stop"),
+                    ("rk", "risk"), ("t1", "target 1"), ("rr", "r÷r"), ("vol", "vol ×"), ("gl", "growth")],
+                   numeric={"c", "t", "gap", "stp", "rk", "t1", "rr", "vol"}))
         sec("check a tip", "paste a stock tip from a group or a newsletter")
         txt = st.text_area("tip", height=140, label_visibility="collapsed",
                            placeholder="*RAYMOND - CMP 1130*\n*SUPPORT - 1060 (DCB)*\n*UPSIDE - 1185/1230+*")
