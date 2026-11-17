@@ -105,40 +105,79 @@ def parse_tradebook(src):
     symbol,date,side,qty,price columns -> ledger rows."""
     name = getattr(src, "name", str(src)).lower()
     raw = pd.read_excel(src, header=None) if name.endswith((".xlsx", ".xls")) else pd.read_csv(src, header=None)
-    hdr = next(i for i, r in raw.iterrows() if {"symbol"} <= {str(x).strip().lower() for x in r.values})
+    head = lambda r: {str(x).strip().lower().replace("_", " ") for x in r.values}  # Zerodha csv: trade_date, xlsx: Trade Date
+    hdr = next((i for i, r in raw.iterrows() if "symbol" in head(r)), None)
+    if hdr is None:
+        raise ValueError("no 'symbol' column found — is this a tradebook (not a P&L statement)?")
     t = raw.iloc[hdr + 1:].copy()
-    t.columns = [str(c).strip().lower() for c in raw.iloc[hdr]]
+    t.columns = [str(c).strip().lower().replace("_", " ") for c in raw.iloc[hdr]]
     t = t.dropna(how="all")
+    if "segment" in t:  # equity only: an F&O or currency tradebook has nothing for this ledger
+        t = t[t.segment.astype(str).str.upper().isin(["EQ", "NAN"])]
     col = lambda *names: next((t[n] for n in names if n in t), pd.Series(None, index=t.index))
     ts = pd.to_datetime(col("order execution time"), errors="coerce")
+    tid = col("trade id", "trade_id").astype(str).str.strip().str.replace(r"\.0$", "", regex=True)  # 402369405.0 -> 402369405
     out = pd.DataFrame({
-        "date": pd.to_datetime(col("trade date", "date")).dt.date,
+        "date": _dates(col("trade date", "date")),
         "time": ts.dt.strftime("%H:%M:%S").fillna(""),
-        "symbol": col("symbol").astype(str).str.strip().str.upper(),
-        "side": col("trade type", "side").astype(str).str.strip().str.lower(),
-        "qty": pd.to_numeric(col("quantity", "qty")), "price": pd.to_numeric(col("price")),
-        "exchange": col("exchange").fillna("NSE").astype(str), "trade_id": col("trade id", "trade_id").astype(str),
+        "symbol": col("symbol").astype(str).str.strip().str.upper().str.replace(r"-(EQ|BE)$", "", regex=True),
+        "side": col("trade type", "side", "type").astype(str).str.strip().str.lower().replace({"b": "buy", "s": "sell"}),
+        "qty": pd.to_numeric(col("quantity", "qty"), errors="coerce"), "price": pd.to_numeric(col("price"), errors="coerce").round(4),
+        "exchange": col("exchange").fillna("NSE").astype(str), "trade_id": tid.where(~tid.isin(["nan", "None", ""])),
         "source": "tradebook"})
-    out = out[out.side.isin(["buy", "sell"]) & out.qty.gt(0) & out.price.gt(0)]
-    out.loc[out.trade_id.isin(["nan", "None", ""]), "trade_id"] = None
-    return out
+    out = out[out.side.isin(["buy", "sell"]) & out.qty.gt(0) & out.price.gt(0) & out.date.notna()]
+    if out.empty:
+        raise ValueError("no equity buys or sells found in this file")
+    return out.reset_index(drop=True)
+
+
+def _dates(x):
+    """2026-07-13 (Zerodha) or 13-07-2026 / 13/07/2026 (other brokers: day first)."""
+    iso = pd.to_datetime(x, errors="coerce", format="ISO8601")
+    return iso.fillna(pd.to_datetime(x.where(iso.isna()), errors="coerce", dayfirst=True, format="mixed")).dt.date
+
+
+def _plain(d):
+    """A trade without its broker id: symbol, side, day, quantity and price (to the paisa)."""
+    parts = [d.symbol.astype(str), d.side.astype(str), pd.to_datetime(d.date).dt.strftime("%Y-%m-%d"),
+             d.qty.astype(float).map("{:g}".format), d.price.astype(float).map("{:.2f}".format)]
+    return pd.Series(["|".join(p) for p in zip(*parts)], index=d.index, dtype=object)
+
+
+def plan_import(new, old=None):
+    """What importing `new` (parse_tradebook rows, one or more files) would change — nothing is saved.
+    Overlap is safe: a trade already in the ledger is skipped, a hand-entered trade that the tradebook also has is
+    replaced by the broker's record (same stock, side and quantity, within 3 days and 3% of the price), and
+    nothing already in the ledger is ever deleted otherwise. Returns dict(add, replaced, known, ledger, oversold)."""
+    old = load(include_ignored=True, actions=False) if old is None else old
+    new = new.assign(date=pd.to_datetime(new.date))
+    new = new[~(new.trade_id.notna() & new.trade_id.duplicated())]  # overlapping files picked together
+    no_id = old.trade_id.isna()
+    seen = (new.trade_id.isin(set(old.trade_id.dropna()))  # same broker trade id
+            | (new.trade_id.isna() & _plain(new).isin(set(_plain(old))))  # a plain csv row already in the ledger
+            | _plain(new).isin(set(_plain(old[no_id & (old.source == "tradebook")]))))  # imported earlier without an id
+    fresh, known = new[~seen], int(seen.sum())
+    manual = old[old.trade_id.isna() & (old.source != "tradebook")]
+    replaced, used = [], set()
+    for i, r in fresh.iterrows():  # hand-entered twin of a broker trade -> keep the broker's record
+        m = manual[(manual.symbol == r.symbol) & (manual.side == r.side) & (manual.qty == r.qty)
+                   & ((manual.date - r.date).abs() <= pd.Timedelta(days=3)) & ((manual.price / r.price - 1).abs() <= .03)
+                   & ~manual.index.isin(used)]
+        if len(m):
+            j = (m.date - r.date).abs().idxmin()
+            used.add(j)
+            replaced.append(dict(old_date=old.date[j], old_price=old.price[j], **r.to_dict()))
+    ledger = pd.concat([old.drop(index=list(used)), fresh], ignore_index=True).sort_values(["date", "time"], kind="stable")
+    held = with_actions(ledger[~ledger.symbol.isin(ignored())].reset_index(drop=True))
+    over = fifo(held.sort_values(["date", "time"], kind="stable"))[2]
+    return dict(add=fresh.reset_index(drop=True), replaced=pd.DataFrame(replaced), known=known, ledger=ledger, oversold=over)
 
 
 def merge(new):
-    """Add tradebook rows to the ledger without duplicates (by broker trade id, else by every field).
-    Returns how many rows were new."""
-    old = load(include_ignored=True, actions=False)
-
-    def key(d):  # built row by row: an empty ledger's columns carry no string type
-        parts = [d.trade_id.fillna("").astype(str), d.symbol.astype(str), d.side.astype(str),
-                 pd.to_datetime(d.date).dt.strftime("%Y-%m-%d").astype(str), d.qty.astype(float).astype(str),
-                 d.price.astype(float).round(4).astype(str)]
-        return pd.Series(["|".join(x) for x in zip(*parts)], index=d.index, dtype=object)
-
-    new = new.assign(date=pd.to_datetime(new.date))
-    fresh = new[~key(new).isin(set(key(old)))]
-    save(pd.concat([old, fresh], ignore_index=True))
-    return len(fresh)
+    """Import tradebook rows (see plan_import). Returns how many trades were added."""
+    p = plan_import(new)
+    save(p["ledger"])
+    return len(p["add"])
 
 
 def add_trade(side, symbol, qty, price, date):
@@ -378,4 +417,19 @@ if __name__ == "__main__":  # self-check on a synthetic ledger
     sp = pd.concat([bon, pd.DataFrame([T("2026-11-20", "10:00", "P", "sell", 17, 70)])], ignore_index=True)
     assert abs(round_trips(sp).pnl.iloc[0] - (17 * 70 - 7 * 148.76)) < .01
     assert _factor("Bonus 3:2") == (2.5, "bonus") and _factor("Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share") == (10, "split")
+    # importing an overlapping tradebook: known trades skipped, a hand-entered twin replaced, new ones added
+    B = lambda d, s, side, q, p, tid: dict(date=pd.Timestamp(d), time="10:00:00", symbol=s, side=side, qty=q, price=p,
+                                           exchange="NSE", trade_id=tid, source="tradebook")
+    old = pd.DataFrame([B("2026-10-01", "X", "buy", 5, 100, "1"), B("2026-10-02", "Y", "buy", 3, 50, "2"),
+                        dict(B("2026-11-03", "Z", "buy", 4, 201, None), source="manual"),       # typed in by hand
+                        dict(B("2026-11-04", "W", "buy", 1, 10, None), source="manual")])       # not in the file: kept
+    new = pd.DataFrame([B("2026-10-02", "Y", "buy", 3, 50.000012, "2"), B("2026-11-02", "Z", "buy", 4, 200.5, "9"),
+                        B("2026-11-05", "X", "sell", 5, 120, "10"), B("2026-11-05", "X", "sell", 5, 120, "10")])
+    p = plan_import(new, old)
+    assert p["known"] == 1 and len(p["add"]) == 2 and len(p["replaced"]) == 1, p
+    L = p["ledger"]
+    assert len(L) == 5 and set(L.trade_id.dropna()) == {"1", "2", "9", "10"} and "W" in set(L.symbol), L
+    assert p["oversold"].empty
+    p2 = plan_import(new[new.symbol != "Y"].assign(symbol="Q"), old)  # sells of a stock bought before the ledger
+    assert set(p2["oversold"].symbol) == {"Q"}
     print("portfolio ok")

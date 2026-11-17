@@ -877,16 +877,56 @@ def portfolio_page():
                     snapshot_thesis(sym, note.strip())
                 st.rerun()
     with a2:
-        show('<div class="meta">import your broker tradebook (Zerodha xlsx/csv, or any csv with '
-             'symbol, date, side, qty, price) — trades already in the ledger are skipped</div>')
-        up = st.file_uploader("tradebook", type=["xlsx", "xls", "csv"], label_visibility="collapsed")
-        if up is not None and st.button("import", width="stretch"):
-            try:
-                n = pf.merge(pf.parse_tradebook(up))
-                st.success(f"{n} new trade{'s' if n != 1 else ''} added")
-                st.rerun()
-            except Exception as e:
-                st.error(f"couldn't read that file: {str(e)[:200]}")
+        lg = pf.load(include_ignored=True, actions=False)
+        show('<div class="meta">import your broker tradebook (Zerodha xlsx/csv, or any csv with symbol, date, side, qty, '
+             'price). any date range works: just download the last few weeks — trades you already have are skipped, '
+             'nothing in your ledger is deleted, and you see what changes before anything is saved.<br>'
+             + (f'your ledger: <b>{len(lg)}</b> trades · {lg.date.min():%d %b %Y} – {lg.date.max():%d %b %Y}'
+                if len(lg) else "your ledger is empty") + '</div>')
+        if flash := st.session_state.pop("pf_flash", None):
+            st.success(flash)
+        ups = st.file_uploader("tradebook", type=["xlsx", "xls", "csv"], accept_multiple_files=True,
+                               label_visibility="collapsed", key=f"pf_up_{st.session_state.get('up_n', 0)}")
+        if ups:
+            parts, bad = [], []
+            for u in ups:
+                try:
+                    parts.append(pf.parse_tradebook(u))
+                except Exception as e:
+                    bad.append(f"{u.name}: {str(e)[:160]}")
+            for b in bad:
+                st.error(f"couldn't read {b}")
+            if parts:
+                plan = pf.plan_import(pd.concat(parts, ignore_index=True))
+                add, rep = plan["add"], plan["replaced"]
+                n_new = len(add) - len(rep)
+                show(f'<div class="note">in {"these files" if len(parts) > 1 else "this file"}: <b>{plan["known"] + len(add)}</b> trades · '
+                     f'<b>{plan["known"]}</b> already in your ledger (skipped) · <b class="up">{n_new}</b> new'
+                     + (f' · <b class="am">{len(rep)}</b> you typed in by hand, replaced by the broker\'s exact record' if len(rep) else "")
+                     + '</div>')
+                if len(add):
+                    ign = pf.ignored()
+                    show(table([dict(d=f"{r.date:%d %b %Y}", sym=f"<b>{esc(r.symbol)}</b>"
+                                     + (' <span class="dim">(kept out)</span>' if r.symbol in ign else ""),
+                                     s=f'<span class="{"up" if r.side == "buy" else "dn"}">{r.side}</span>',
+                                     q=f"{r.qty:g}", p=num(r.price, 2), v=f"₹{r.qty * r.price:,.0f}")
+                                for r in add.sort_values(["date", "time"]).itertuples()],
+                               [("d", "date"), ("sym", "symbol"), ("s", "side"), ("q", "qty"), ("p", "price"), ("v", "value")],
+                               numeric={"q", "p", "v"}))
+                if len(plan["oversold"]):
+                    o_ = plan["oversold"].groupby("symbol").qty.sum()
+                    st.warning("these sells have no matching buy in your ledger, so their profit can't be worked out: "
+                               + ", ".join(f"{s} ({q:g} shares)" for s, q in o_.items())
+                               + " — import an older tradebook that covers when you bought them")
+                if len(add) and st.button(f"add {len(add)} trade{'s' if len(add) != 1 else ''} to my ledger",
+                                          type="primary", width="stretch"):
+                    pf.save(plan["ledger"])
+                    st.session_state["pf_flash"] = (f"added {n_new} new trade{'s' if n_new != 1 else ''}"
+                                                    + (f", replaced {len(rep)} hand-entered" if len(rep) else ""))
+                    st.session_state["up_n"] = st.session_state.get("up_n", 0) + 1  # clears the file picker
+                    st.rerun()
+                elif not len(add):
+                    st.info("nothing new — every trade in this file is already in your ledger")
         ign = st.text_input("keep out of the portfolio (symbols)", " ".join(sorted(pf.ignored())),
                             help="e.g. a stock bought only for an IPO shareholder quota")
         if " ".join(sorted(ign.upper().split())) != " ".join(sorted(pf.ignored())):
