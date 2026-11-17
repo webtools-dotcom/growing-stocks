@@ -305,8 +305,9 @@ def daily(symbols=None):
     out = {}
     for sym, g in d.sort_values("date").groupby("symbol"):
         g = g.drop_duplicates("date").reset_index(drop=True)
-        f = adjust_prices(g.close) / g.close  # the same factor scales open/high/low
-        g = g.assign(open=g.open * f, high=g.high * f, low=g.low * f, close=g.close * f).dropna(subset=["close"])
+        f = adjust_prices(g.close) / g.close  # the same factor scales open/high/low, and volume the other way
+        g = g.assign(open=g.open * f, high=g.high * f, low=g.low * f, close=g.close * f,
+                     volume=g.volume / f).dropna(subset=["close"])
         out[sym] = stitch(old[sym], g) if sym in old else g
     return out
 
