@@ -463,3 +463,60 @@ def hold_vs_return(t, stop=.20, h=300):
     fig.update_xaxes(title=dict(text="days held", font=dict(size=10)), rangemode="tozero")
     fig.update_yaxes(ticksuffix="%")
     return fig
+
+
+# ---------------------------------------------------------------- breakouts
+def breakout_chart(d, tf, plan=None, tip=None, h=520):
+    """Candles with the setup drawn: box (shaded range), long base (ceiling band) or falling line, plus the stop and
+    targets on a closing basis; `tip` adds a pasted tip's own stop/targets in blue. d: daily OHLCV indexed by date."""
+    from plotly.subplots import make_subplots
+    import numpy as np
+    import breakouts as B
+    if tf == "daily":
+        b = d.iloc[-130:]
+    elif tf == "weekly":
+        b = B.resample(d.iloc[-260 * 3:], "W-FRI")
+    else:
+        b = B.resample(d, "ME")
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[.8, .2], vertical_spacing=.03)
+    fig.add_trace(go.Candlestick(x=b.index, open=b.open, high=b.high, low=b.low, close=b.close, name="price",
+                                 increasing=dict(line=dict(color=C["green"]), fillcolor=C["green"]),
+                                 decreasing=dict(line=dict(color=C["red"]), fillcolor=C["red"])), 1, 1)
+    fig.add_trace(go.Bar(x=b.index, y=b.volume, marker_color=C["muted"], name="volume"), 2, 1)
+    x0, x1 = b.index[0], b.index[-1]
+    log = tf == "monthly"
+
+    def lv(y, col, txt, dash="dot", w=1):
+        if y is None or y != y:
+            return
+        fig.add_hline(y=y, line=dict(color=col, dash=dash, width=w), row=1, col=1)
+        fig.add_annotation(x=x1, y=np.log10(y) if log else y, xref="x", yref="y", text=txt, showarrow=False, xanchor="right",
+                           yanchor="bottom", font=dict(color=col, size=10), bgcolor="rgba(15,16,13,.75)")
+
+    if plan is not None:
+        if plan["pattern"] == "box":
+            fig.add_hrect(y0=plan["stop"], y1=plan["level"], fillcolor=C["amber"], opacity=.08, line_width=0, row=1, col=1)
+            lv(plan["level"], C["amber"], f"box top {plan['level']:,.2f}", "solid", 1.5)
+        elif plan["pattern"] == "base":
+            fig.add_hrect(y0=plan["level"] * .97, y1=plan["level"], fillcolor=C["amber"], opacity=.18, line_width=0, row=1, col=1)
+            lv(plan["level"], C["amber"], f"ceiling {plan['level']:,.2f}", "solid", 1.5)
+        elif plan.get("anchor") == plan.get("anchor") and plan.get("bars") == plan.get("bars"):
+            bars = int(plan["bars"])
+            xa = d.index[-bars - 1] if plan["pattern"] == "swing" else d.index[-1] - pd.Timedelta(weeks=bars)
+            fig.add_trace(go.Scatter(x=[xa, x1], y=[plan["anchor"], plan["level"]], mode="lines",
+                                     line=dict(color=C["amber"], width=2), name="falling line"), 1, 1)
+        lv(plan["stop"], C["red"], f"stop {plan['stop']:,.2f} (close basis)")
+        lv(plan.get("target1"), C["green"], f"target 1 {plan.get('target1', 0):,.2f}")
+        lv(plan.get("target2"), C["green"], f"target 2 {plan.get('target2', 0):,.2f}", "dash")
+    for t in (tip or {}).get("targets", []):
+        lv(t, C["blue"], f"tip target {t:,.2f}", "dashdot")
+    if (tip or {}).get("stop"):
+        lv(tip["stop"], C["blue"], f"tip stop {tip['stop']:,.2f}", "dashdot")
+    fig.update_layout(height=h, margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(family=FONT, size=11, color=C["dim"]), showlegend=False, xaxis_rangeslider_visible=False,
+                      dragmode=False, hovermode="x unified")
+    fig.update_xaxes(showgrid=False, linecolor=C["line"], range=[x0, x1 + (x1 - x0) * .03], fixedrange=True)
+    fig.update_yaxes(gridcolor="#1d1e19", zeroline=False, row=1, col=1, type="log" if log else "linear",
+                     tickformat=",.0f", dtick="D2" if log else None, fixedrange=True)
+    fig.update_yaxes(showgrid=False, showticklabels=False, row=2, col=1)
+    return fig

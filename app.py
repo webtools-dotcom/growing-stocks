@@ -11,7 +11,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+import breakouts  # chart breakouts graded by the 20-year breakout-lab evidence
 import brief  # filings-grounded LLM brief
+import tips  # reads a pasted stock tip
 import fundamentals  # full financials + growth checklist
 import portfolio as pf  # trade ledger, positions, round trips, costs
 import rising  # exit rule + alert logic (shared with backtests)
@@ -915,8 +917,8 @@ if in_pf:
     portfolio_page()
     st.stop()
 
-t_today, t_board, t_stock, t_cmp, t_sec, t_fil, t_watch, t_hist = st.tabs(
-    ["today", "board", "stock", "compare", "themes", "filings", "watchlist", "scoreboard"])
+t_today, t_board, t_bo, t_stock, t_cmp, t_sec, t_fil, t_watch, t_hist = st.tabs(
+    ["today", "board", "breakouts", "stock", "compare", "themes", "filings", "watchlist", "scoreboard"])
 
 # ---------------------------------------------------------------- today
 with t_today:
@@ -1075,6 +1077,113 @@ with t_board:
                [("st", "status"), ("sym", "symbol"), ("ind", "industry"), ("c", "close"), ("d", "1d"), ("q", "qtr"),
                 ("s", "sales yoy"), ("p", "profit yoy"), ("cap", "capex"), ("pe", "p/e"), ("y", "1y"), ("t", "trigger"), ("m", "mcap cr"), ("sc", "steady")],
                numeric={"c", "d", "s", "p", "pe", "y", "t", "m", "sc"}))
+
+# ---------------------------------------------------------------- breakouts
+@st.cache_data(ttl=300)
+def breakout_scan():
+    p = DATA / "breakouts.csv"
+    return pd.read_csv(p) if p.exists() else pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def breakout_daily(sym):
+    d = breakouts.daily([sym]).get(sym)
+    return d.set_index("date") if d is not None else pd.DataFrame()
+
+
+GRADE_TXT = {"A": ("up", "grade A — box breakout + a growing company: the only setup that beat the typical stock in 20 years "
+                         "(86% made money, 9% hit the stop; 22 cases, a small sample)"),
+             "B": ("am", "grade B — held up better than most (a box, or a base tested 4+ times) but still trailed the typical stock"),
+             "C": ("dn", "grade C — this kind of breakout lost to simply holding the typical stock in the 20-year test")}
+TF = {"base": "monthly", "trendline": "weekly", "swing": "daily", "box": "weekly"}
+
+
+def breakout_card(r):
+    ev = breakouts.evidence()["patterns"].get(r["pattern"], {})
+    cls, gtxt = GRADE_TXT[r["grade"]]
+    rec = (f'past {r["pattern"]} breakouts: <b>{ev["events"]:,}</b> · median {pct(ev["median"], 1)} · {ev["won"]:.0%} made money · '
+           f'{ev["stopped"]:.0%} hit the stop · vs the typical stock {pct(ev["vs_market"], 1)}') if ev else ""
+    gl = r.get("growth_label")
+    show(f'<div class="note" style="border-left:2px solid {C["amber"]};padding:.6rem .9rem;background:#12130e;color:{C["text"]};font-size:.8rem">'
+         f'<b>{esc(breakouts.SETUP[r["setup"]])}</b> · <span class="{cls}">{gtxt}</span><br>'
+         f'close {num(r["close"], 2)} · trigger: close above <b>{num(r["trigger"], 2)}</b> ({pct(r["gap"], 1)} away) · '
+         f'stop {num(r["stop"], 2)} on a closing basis (risk {r["risk"]:.0%})<br>'
+         f'targets {num(r["target1"], 2)} / {num(r["target2"], 2)} (typical / good outcome of past breakouts of this kind) · '
+         f'reward÷risk {num(r["reward_risk"], 1)}'
+         f'{" · growth: <b>" + esc(str(gl).lower()) + "</b>" if isinstance(gl, str) else ""}<br>'
+         f'<span class="dim">{rec}</span></div>')
+
+
+with t_bo:
+    bo = breakout_scan()
+    if bo.empty:
+        show('<div class="note">no breakout scan yet — click <b>update data</b> (or run <b>python breakouts.py</b>)</div>')
+    else:
+        show('<div class="note">chart breakouts on every liquid stock, graded by how that kind of setup did across 112,311 past '
+             'breakouts (2006–2026, breakout lab). on their own, breakouts trailed the typical stock; a box breakout by a growing '
+             'company was the exception. research tool, not advice.</div>')
+        f1, f2, f3 = st.columns([1, 3, 1])
+        grades = f1.multiselect("grade", ["A", "B", "C"], default=["A", "B"])
+        setups = f2.multiselect("setup", list(breakouts.SETUP), default=["box_break", "box_near", "base_near", "base_retest"],
+                                format_func=lambda s: breakouts.SETUP[s])
+        fresh = f3.checkbox("my watchlist + holdings only", False)
+        v = bo[bo.grade.isin(grades) & bo.setup.isin(setups)]
+        if fresh:
+            v = v[v.symbol.isin(set(watch) | set(pos.symbol))]
+        sec("live setups", f"{len(v)} of {len(bo)} · gap = how far the trigger is above the close")
+        gcls = {"A": "up", "B": "am", "C": "dn"}
+        show(table([dict(g=f'<span class="{gcls[r.grade]}">{r.grade}</span>', sym=f"<b>{esc(r.symbol)}</b>",
+                         s=esc(breakouts.SETUP[r.setup]), c=num(r.close, 2), t=num(r.trigger, 2), gap=pct(r.gap, 1), stp=num(r.stop, 2),
+                         rk=f"{r.risk:.0%}", t1=num(r.target1, 2), rr=num(r.reward_risk, 1), vol=num(r.vol_ratio, 1),
+                         gl=status(r.growth_label) if isinstance(r.growth_label, str) else '<span class="dim">–</span>')
+                    for r in v.head(200).itertuples()],
+                   [("g", "grade"), ("sym", "symbol"), ("s", "setup"), ("c", "close"), ("t", "trigger"), ("gap", "gap"), ("stp", "stop"),
+                    ("rk", "risk"), ("t1", "target 1"), ("rr", "r÷r"), ("vol", "vol ×"), ("gl", "growth")],
+                   numeric={"c", "t", "gap", "stp", "rk", "t1", "rr", "vol"}))
+        c1, c2 = st.columns([2, 3])
+        pick = c1.selectbox("chart a setup", list(v.symbol.unique()), index=None, placeholder="pick a symbol from the list")
+        if pick:
+            rows = v[v.symbol == pick]
+            ch = c2.selectbox("setup", list(rows.setup), format_func=lambda s: breakouts.SETUP[s], key=f"bo_set_{pick}")
+            r = rows[rows.setup == ch].iloc[0].to_dict()
+            breakout_card(r)
+            d = breakout_daily(pick)
+            if len(d):
+                st.plotly_chart(viz.breakout_chart(d, TF[r["pattern"]], r), width="stretch", config=PLOT)
+
+        sec("check a tip", "paste a stock tip from a group or a newsletter")
+        txt = st.text_area("tip", height=140, label_visibility="collapsed",
+                           placeholder="*RAYMOND - CMP 1130*\n*SUPPORT - 1060 (DCB)*\n*UPSIDE - 1185/1230+*")
+        if txt.strip():
+            names = dict(q("select symbol, company_name from instruments").values.tolist())
+            tp = tips.parse(txt, set(names), names)
+            if not tp["symbol"]:
+                st.warning("couldn't find a stock in that text — include its NSE symbol (e.g. RAYMOND)")
+            else:
+                sym = tp["symbol"]
+                d = breakout_daily(sym)
+                last = float(d.close.iloc[-1]) if len(d) else np.nan
+                ref = tp["cmp"] or last
+                show('<div class="kv">' + "".join(f"<div><span>{k}</span>{v_}</div>" for k, v_ in [
+                    ("stock", f"<b>{esc(sym)}</b>"), ("tip CMP", num(tp["cmp"], 2)), ("close now", num(last, 2)),
+                    ("buy range", f'{num(tp["buy_low"], 2)}–{num(tp["buy_high"], 2)}' if tp["buy_low"] else "–"),
+                    ("tip stop", f'{num(tp["stop"], 2)} {pct(tp["stop"] / ref - 1)}' if tp["stop"] else "–"),
+                    ("tip targets", " / ".join(f"{num(x, 2)} {pct(x / ref - 1)}" for x in tp["targets"]) or "–")]) + "</div>")
+                mine = bo[bo.symbol == sym]
+                if len(mine):
+                    r = mine.iloc[int(mine.gap.abs().to_numpy().argmin())].to_dict()  # the setup whose level is nearest the price
+                    breakout_card(r)
+                    if tp["targets"]:
+                        show('<div class="note">how often similar setups got there before the stop or the time limit: ' + " · ".join(
+                            f"{num(x, 2)} ({pct(x / ref - 1)}): <b>{breakouts.odds(r['pattern'], x / ref - 1):.0%}</b>"
+                            for x in tp["targets"]) + f" of past {r['pattern']} breakouts</div>")
+                    fig = viz.breakout_chart(d, TF[r["pattern"]], r, tp) if len(d) else None
+                else:
+                    show('<div class="note">no chart setup on this stock right now (no box, base or falling line near the price) — '
+                         'the tip may rest on something else: results, news or the sector</div>')
+                    fig = viz.breakout_chart(d, "daily", None, tp) if len(d) else None
+                if fig is not None:
+                    st.plotly_chart(fig, width="stretch", config=PLOT)
 
 # ---------------------------------------------------------------- stock
 with t_stock:

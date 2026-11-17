@@ -112,6 +112,25 @@ cards, each test drawn as a bar against its threshold. Below them:
 - **Owners** — promoter, FII and fund holding changes each quarter.
 - Revenue and profit with year-on-year growth on every bar, margins against their 3-year band, cash flow, debt.
 
+### Breakouts — chart setups, judged by 20 years of evidence
+
+A **breakouts** tab finds chart setups on every liquid stock, each with a trade plan (trigger, stop on a closing basis,
+targets taken from what past breakouts of that kind actually reached) and a **grade** from a backtest of 112,311
+breakouts on 2,639 stocks since 2006 (split/bonus-adjusted Upstox history):
+
+| Setup | What it is | 20-year record |
+|---|---|---|
+| **box** | 26+ weeks in a tight range, then a weekly close above the top | 57% made money, 17% hit the stop |
+| **long base** | a ceiling tested 3+ times over 3+ years (closing basis), then a close above it | median +1%, average +22%: a few big winners |
+| trendline / swing line | a falling line through lower highs, then a close above it | lost to the typical stock in every split |
+
+On their own, breakouts trailed the typical stock. The exception — **grade A** — was a box breakout by a company
+Rising rates leader or emerging: 86% made money and only 9% hit the stop (22 cases since 2023, still a small sample).
+That's the same lesson as the rest of the app: growth plus a price confirmation beats either alone.
+
+**Check a tip** — paste a tip from a group or newsletter; Rising reads the stock, CMP, stop and targets, draws them
+next to its own levels, and says how often similar setups reached that target before the stop.
+
 ### Compare, themes, scoreboard and the rules sandbox
 
 ![Compare up to three stocks on one growth/quality radar](docs/screenshots/compare.png)
@@ -369,6 +388,8 @@ flowchart TD
 | `insights.py` | Safety radar, capacity bridge, order book, margin band, P/E history, insider trades, rule-based verdicts |
 | `brief.py` | Optional AI brief and daily red-flag alerts |
 | `portfolio.py` | Trade ledger, tradebook import, FIFO positions and round trips, cost estimates, entry-day labels |
+| `breakouts.py` | Box / base / trendline detectors, live scan, grades and plans; evidence in `breakout_evidence.json` |
+| `tips.py` | Reads a pasted stock tip (symbol, CMP, buy range, stop, targets) |
 | `viz.py` | Every chart builder and the colour palette |
 | `research.py` | The 3-year study behind the labels and the steadiness score |
 | `exit_backtest.py` | The exit-rule backtest |

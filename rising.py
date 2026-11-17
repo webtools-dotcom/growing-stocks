@@ -428,6 +428,11 @@ def _update():
             print(f"   industry list failed: {e}")
     print("3/3 scan")
     out = scan()
+    try:  # chart breakouts (box / base / trendline), graded by the 20-year breakout-lab evidence
+        import breakouts
+        breakouts.scan()
+    except Exception as e:
+        print(f"   breakout scan skipped: {e}")
     import portfolio
     try:
         portfolio.refresh_actions(set(portfolio.load(actions=False).symbol))  # bonuses/splits change share counts
