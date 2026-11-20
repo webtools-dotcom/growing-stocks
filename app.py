@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 import breakouts  # chart breakouts graded by the 20-year breakout-lab evidence
+import longterm  # 4-5 year lens from the long-term lab
 import brief  # filings-grounded LLM brief
 import tips  # reads a pasted stock tip
 import fundamentals  # full financials + growth checklist
@@ -957,8 +958,8 @@ if in_pf:
     portfolio_page()
     st.stop()
 
-t_today, t_board, t_bo, t_stock, t_cmp, t_sec, t_fil, t_watch, t_hist = st.tabs(
-    ["today", "board", "breakouts", "stock", "compare", "themes", "filings", "watchlist", "scoreboard"])
+t_today, t_board, t_bo, t_lt, t_stock, t_cmp, t_sec, t_fil, t_watch, t_hist = st.tabs(
+    ["today", "board", "breakouts", "long-term", "stock", "compare", "themes", "filings", "watchlist", "scoreboard"])
 
 # ---------------------------------------------------------------- today
 with t_today:
@@ -1227,6 +1228,193 @@ with t_bo:
                     fig = viz.breakout_chart(d, "daily", None, tp) if len(d) else None
                 if fig is not None:
                     st.plotly_chart(fig, width="stretch", config=PLOT)
+
+# ---------------------------------------------------------------- long-term
+@st.cache_data(ttl=300)
+def longterm_scores():
+    return longterm.load()
+
+
+@st.cache_data(ttl=3600)
+def longterm_check(sym):
+    r = longterm.check(sym, longterm_scores())
+    return None if r is None else r.to_dict()
+
+
+def lt_p(x, signed=False):
+    return '<span class="dim">–</span>' if x is None or pd.isna(x) else (f"{x:+.0%}" if signed else f"{x:.0%}")
+
+
+def lt_vs(x, good_if_up=True):
+    """'+8%' coloured green when it's the good direction."""
+    if x is None or pd.isna(x):
+        return ""
+    if abs(x) < .005:
+        return '<span class="dim">±0%</span>'
+    c = "" if abs(x) < .015 else ("up" if (x > 0) == good_if_up else "dn")
+    return f'<span class="{c}">{x:+.0%}</span>'
+
+
+def lt_ps(rank):
+    """Where a stock's price-to-sales sits among today's stocks: 'cheap · 19 of 100' (1 = cheapest)."""
+    if rank is None or pd.isna(rank):
+        return '<span class="dim">–</span>'
+    n = max(1, round(rank * 100))  # the word follows the number shown, so "70 of 100" always reads the same
+    word = "cheap" if n <= 40 else "middle" if n <= 70 else "expensive"
+    c = {"cheap": "up", "middle": "", "expensive": "dn"}[word]
+    return f'<span class="{c}">{word}</span> <span class="dim">· {n} of 100</span>'
+
+
+def lt_gname(g):
+    return g.replace("4 of 6 core checks", "4+ of 6 good-company checks")
+
+
+def longterm_tab():
+    """The long-term tab (a function, so its names can't clash with the other tabs')."""
+    LE = longterm.evidence()["5"]
+    LG = LE["groups"]
+    lt_all, lt_cheap = LG["every stock"], LG["cheap for its sales (cheapest 40% by P/S)"]
+    lt_q, lt_qc = LG["4 of 6 core checks (quality alone)"], LG["cheap for its sales + 4 of 6 core checks"]
+    show(f'<div class="note">for money you will leave alone for 4–5 years. {LE["stocks"]:,} NSE companies were judged only on what '
+         f'was public on 30 Sep 2017, 2018, 2019, 2020 and 2021, then followed for 5 years (long-term lab). '
+         f'research tool, not advice.</div>')
+    lv = st.segmented_control("view", ["what the test found", "check a stock", "my long-term stocks"],
+                              default="what the test found", key="lt_view", label_visibility="collapsed") or "what the test found"
+
+    if lv == "what the test found":
+        show('<div class="kv">' + "".join(f"<div><span>{a}</span>{b}</div>" for a, b in [
+            ("one stock: doubled in 5 yrs", f"<b>{lt_p(lt_all['doubled'])}</b>"),
+            ("one stock: lost money", f'<b class="dn">{lt_p(lt_all["lost"])}</b>'),
+            ("5 stocks, equal money: doubled", f'<b>{lt_p(lt_all["basket5"]["doubled"])}</b>'),
+            ("5 stocks: lost money", f'<b class="up">{lt_p(lt_all["basket5"]["lost"])}</b>'),
+            ("5 cheap-for-sales stocks: doubled", f'<b class="up">{lt_p(lt_cheap["basket5"]["doubled"])}</b>')]) + "</div>")
+        show(f'<div class="note" style="border-left:2px solid {C["amber"]};padding:.6rem .9rem;background:#12130e;'
+             f'color:{C["text"]};font-size:.8rem;line-height:1.7">'
+             '<b>1. spreading your money mattered more than picking.</b> one stock on its own lost money about 1 time in 5; '
+             'five stocks with equal money about 1 time in 25 — and still doubled more often, because one big winner carries the rest.<br>'
+             '<b>2. the price you pay mattered most.</b> stocks cheap for their sales (cheapest 40% by price-to-sales that day) '
+             'doubled more often than other stocks bought the same day, in <b>every one</b> of the 5 buy years.<br>'
+             '<b>3. "good company" checks alone did not raise the odds of doubling.</b> steady sales, high return on capital and '
+             'low debt were usually already expensive. they did make a 50% fall a little less likely.<br>'
+             f'<b>4. loss-making companies</b> lost money far more often ({lt_p(LG["loss-making when bought"]["lost"])} vs '
+             f'{lt_p(lt_all["lost"])}).</div>')
+        sec("doubled in 5 years, by the year you bought", "each bar: the share of that group's stocks that doubled")
+        yrs = list(lt_all["by_year"])
+        fig = go.Figure()
+        for name, g, col in [("every stock", lt_all, C["muted"]), ("good-company checks only", lt_q, C["blue"]),
+                             ("cheap for its sales", lt_cheap, C["amber"]), ("cheap + good-company checks", lt_qc, C["green"])]:
+            v = [g["by_year"].get(y, {}).get("doubled") for y in yrs]
+            fig.add_bar(name=name, x=[f"Sep {y}" for y in yrs], y=v, marker_color=col, text=[f"{x:.0%}" for x in v],
+                        textposition="outside", hovertemplate="%{x}: %{y:.0%} doubled<extra>" + name + "</extra>")
+        viz.chart_layout(fig, 320)
+        fig.update_layout(barmode="group", hovermode="closest", yaxis=dict(tickformat=".0%", range=[0, 1.08]))
+        st.plotly_chart(fig, width="stretch", config=PLOT)
+        by = lt_all["by_year"]
+        show(f'<div class="note">the year you buy changes everything: from Sep 2017 {lt_p(by["2017"]["doubled"])} of stocks doubled, '
+             f'from Sep 2019 {lt_p(by["2019"]["doubled"])}. that is why every comparison below is against stocks bought the '
+             f'<b>same day</b>.</div>')
+
+        sec("groups", "± = vs every stock bought the same day · ×5 = equal money in 5 random picks from the group · "
+                      "better in = buy years it doubled more often")
+        rows = []
+        for name, g in LG.items():
+            b = g.get("basket5") or {}
+            rows.append(dict(g=esc(lt_gname(name)), n=f'{g["n"]:,}', d=f'{lt_p(g["doubled"])} {lt_vs(g["doubled_vs"])}',
+                             l=f'{lt_p(g["lost"])} {lt_vs(g["lost_vs"], False)}', c=f'{lt_p(g["crash"])} {lt_vs(g["crash_vs"], False)}',
+                             y=g.get("years_better", "") if name != "every stock" else "", bd=lt_p(b.get("doubled")), bl=lt_p(b.get("lost"))))
+        show(table(rows, [("g", "group"), ("n", "cases"), ("d", "doubled"), ("l", "lost money"), ("c", "fell 50%+"),
+                          ("y", "better in"), ("bd", "×5 doubled"), ("bl", "×5 lost")],
+                   numeric={"n", "d", "l", "c", "y", "bd", "bl"}))
+        sec("each check on its own", "written down before looking at any result · change in the chance of each outcome for "
+                                     "stocks that passed, vs every stock bought the same day")
+        rows = [dict(c=esc(n), k=f'{c["passed"]["n"]:,}', d=lt_vs(c["passed"]["doubled_vs"]), l=lt_vs(c["passed"]["lost_vs"], False),
+                     f=lt_vs(c["passed"]["crash_vs"], False), y=c["passed"].get("years_better", ""))
+                for n, c in LE["checks"].items()]
+        show(table(rows, [("c", "check"), ("k", "passed"), ("d", "doubling"), ("l", "losing money"),
+                          ("f", "a 50% fall"), ("y", "better in")], numeric={"k", "d", "l", "f", "y"}))
+        show('<div class="note"><b>be careful with these numbers.</b> only companies still listed today are in the data — ones that '
+             'went bust are missing, and cheap companies go bust more often, so the "cheap" result is flattered. 2017–2026 favoured '
+             'cheap, old-economy and smaller companies; in the 2010s expensive "quality" companies led, and 12 years of results '
+             "can't test that era. prices only: dividends are not counted. the combined groups were formed after looking at the "
+             'single checks, so treat them as a hint.</div>')
+
+    elif lv == "check a stock":
+        LS = longterm_scores()
+        opts = sorted(set(LS.symbol) | set(all_symbols())) if len(LS) else all_symbols()
+        pick = st.selectbox("stock", opts, index=None, placeholder="type a symbol, e.g. TITAN", key="lt_pick")
+        if pick:
+            with st.spinner("reading its yearly results…"):
+                r = longterm_check(pick)
+            if r is None:
+                st.warning("couldn't score it: no Screener page, or under ~10 months of prices")
+            else:
+                show('<div class="kv">' + "".join(f"<div><span>{a}</span>{b}</div>" for a, b in [
+                    ("good-company checks", f"<b>{int(r['core'])} of 6</b>"),
+                    ("price for its sales (1 = cheapest of 100)", f"<b>{lt_ps(r['ps_rank'])}</b>"),
+                    ("P/E", f"<b>{r['pe']:.0f}</b>" if pd.notna(r["pe"]) else '<b class="dn">loss-making</b>'),
+                    ("last 1 year", f"<b>{pct(r['past_1y'])}</b>"),
+                    ("results up to", f"<b>{pd.Timestamp(r['fy']):%b %Y}</b>")]) + "</div>")
+                if not r["studied"]:
+                    show('<div class="flag warn">outside what the test covered (a bank or lender, or under ₹25 lakh traded a day): '
+                         'the odds below may not apply.</div>')
+                CORE = longterm.CORE
+                why = {
+                    CORE[0]: "–" if pd.isna(r["sales_up"]) else f"sales went up in {int(r['sales_up'])} of the last 3 years",
+                    CORE[1]: f"{lt_p(r['sales_g3'])} a year",
+                    CORE[2]: "no loss in the last 4 years" if r["loss_years"] == 0 else f"a loss in {int(r['loss_years'])} of the last 4 years",
+                    CORE[3]: f"{r['roce_avg3']:.0f}% a year" if pd.notna(r["roce_avg3"]) else "not enough history",
+                    CORE[4]: f"debt = {r['de']:.2f}× its own money" if pd.notna(r["de"]) else "–",
+                    CORE[5]: f"{r['cash_conv']:.0%} of profit came in as cash (3 yrs)" if pd.notna(r["cash_conv"]) else "–"}
+                sec("the six good-company checks", "these did not raise the odds of doubling on their own; they help avoid accidents")
+                show('<div style="display:grid;grid-template-columns:2.6rem 1fr auto;gap:.25rem .8rem;font-size:.84rem">' + "".join(
+                    f'<span class="{"up" if r[c] else "dn"}">{"yes" if r[c] else "no"}</span><span>{esc(q)}</span>'
+                    f'<span class="dim" style="text-align:right;font-size:.75rem">{esc(why[c])}</span>' for c, q in longterm.PLAIN.items())
+                     + "</div>")
+                sec("stocks like this, in the past", "5 years after each test date · one stock, and ×5 = equal money in 5 such stocks")
+                rows = []
+                for gn in ["every stock"] + [g for g in str(r["groups"]).split("; ") if g]:
+                    g, b = LG[gn], LG[gn].get("basket5") or {}
+                    label = f"<b>{esc(lt_gname(gn))}</b>" if gn != "every stock" else '<span class="dim">every stock (for comparison)</span>'
+                    rows.append(dict(g=label, d=lt_p(g["doubled"]), l=lt_p(g["lost"]), c=lt_p(g["crash"]),
+                                     bd=lt_p(b.get("doubled")), bl=lt_p(b.get("lost"))))
+                show(table(rows, [("g", "group this stock is in"), ("d", "doubled"), ("l", "lost money"),
+                                  ("c", "fell 50%+"), ("bd", "×5 doubled"), ("bl", "×5 lost")],
+                           numeric={"d", "l", "c", "bd", "bl"}))
+                show('<div class="note">odds for a <i>group</i> of past stocks, not a forecast for this one. no group came close to a '
+                     'sure thing: the best single-stock odds of doubling were about 6 in 10.</div>')
+
+    else:
+        LS = longterm_scores()
+        if pos.empty:
+            show('<div class="note">no open positions — add trades in <b>portfolio</b> (top right).</div>')
+        elif LS.empty:
+            show('<div class="note">no long-term scores yet — run <b>python longterm.py fetch</b> once (reads the '
+                 'yearly results of every company, about an hour), then each <b>update data</b> keeps them current.</div>')
+        else:
+            m = pos.merge(LS, on="symbol", how="left")
+            m["value"] = m.qty * m.price
+            tot = m.value.sum()
+            rows = []
+            for x in m.sort_values("value", ascending=False).itertuples():
+                gs = [g for g in str(x.groups).split("; ") if g and g != "nan"]
+                rows.append(dict(s=f"<b>{esc(x.symbol)}</b>", w=lt_p(x.value / tot) if tot and pd.notna(x.value) else "–",
+                                 c=f"{int(x.core)}/6" if pd.notna(x.core) else '<span class="dim">–</span>', p=lt_ps(x.ps_rank),
+                                 e=f"{x.pe:.0f}" if pd.notna(x.pe) else ('<span class="dn">loss</span>' if pd.notna(x.core) else "–"),
+                                 _wrap=", ".join(esc(lt_gname(g)) for g in gs) or '<span class="dim">none of the tested groups</span>'))
+            sec("your open positions, through the long-term lens", f"{len(m)} stocks · price for sales: 1 = cheapest of 100")
+            show(table(rows, [("s", "symbol"), ("w", "share of money"), ("c", "good-company checks"),
+                              ("p", "price for sales"), ("e", "P/E"), ("_wrap", "groups")],
+                       numeric={"w", "c", "p", "e"}))
+            top = m.value.max() / tot if tot else 0
+            show(f'<div class="note">you hold <b>{len(m)}</b> stocks; the largest is <b>{lt_p(top)}</b> of your money. in the test, '
+                 f'one stock on its own lost money {lt_p(lt_all["lost"])} of the time over 5 years; five stocks with equal money '
+                 f'{lt_p(lt_all["basket5"]["lost"])}. spreading new money so no single stock carries the plan was the most '
+                 f'reliable thing the test found.</div>')
+
+
+with t_lt:
+    longterm_tab()
+
 
 # ---------------------------------------------------------------- stock
 with t_stock:

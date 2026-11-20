@@ -126,3 +126,18 @@ gap = pd.concat([old.head(5), old[old.date >= dt[30]]])  # old stops 5 weeks bef
 assert len(stitch(gap.assign(date=list(dt[:5] - pd.Timedelta(days=60)) + list(gap.date[5:])), new)) == 30
 assert len(stitch(old.assign(close=[100.0, 300.0] * 25), new)) == 30  # sources disagree: new only
 print("stitch ok")
+
+# long-term lens: the lab's checks score a synthetic company the same way
+import longterm  # noqa: E402
+
+yrs = ["Mar 2021", "Mar 2022", "Mar 2023", "Mar 2024", "Mar 2025", "Mar 2026"]
+pg = {"tables": {
+    "annual": pd.DataFrame({y: [100 * 1.2 ** i, 15, 10 * 1.2 ** i] for i, y in enumerate(yrs)}, index=["Sales", "OPM %", "Net Profit"]),
+    "balance": pd.DataFrame({y: [10, 90, 20, 50, 5] for y in yrs}, index=["Equity Capital", "Reserves", "Borrowings", "Fixed Assets", "CWIP"]),
+    "cashflow": pd.DataFrame({y: [11 * 1.2 ** i] for i, y in enumerate(yrs)}, index=["Cash from Operating Activity"]),
+    "ratios": pd.DataFrame({y: [20] for y in yrs}, index=["ROCE %"])}}
+_t = longterm.traits(longterm.tables(pg), pd.Timestamp("2026-11-20"))
+_d = longterm._finish(pd.DataFrame([dict(symbol="X", mcap=500.0, price=10.0, past_1y=.2, turnover_cr=1.0, **_t)]))
+assert _d.core.iloc[0] == 6 and not _d.fin.iloc[0], _d.T
+assert abs(_t["sales_g3"] - .2) < 1e-9 and _t["loss_years"] == 0 and abs(_t["de"] - .2) < 1e-9
+print("long-term checks ok")

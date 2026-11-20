@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 
 from config import DATA
 from safeio import read_json, save_json
-from screener_refresh import H, table
+from screener_refresh import H, table, year_labels
 
 CACHE = DATA / "fundamentals"
 SECTIONS = {"quarters": "quarters", "annual": "profit-loss", "balance": "balance-sheet",
@@ -80,6 +80,8 @@ def get(sym, max_age_days=7, refresh=False):
     # convert_axes=False: keep column labels like "Mar 2024" / "TTM" as text
     d["tables"] = {k: pd.read_json(io.StringIO(v), orient="split", convert_axes=False, convert_dates=False)
                    for k, v in d["tables"].items()}
+    for t in d["tables"].values():  # pages cached before labels were cleaned
+        t.columns = year_labels(t.columns)
     return d
 
 

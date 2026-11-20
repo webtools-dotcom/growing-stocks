@@ -24,6 +24,18 @@ H = {"User-Agent": "Mozilla/5.0"}
 ALIASES = {"Revenue": "Sales", "Financing Profit": "Operating Profit", "Financing Margin %": "OPM %"}
 
 
+def year_labels(cols):
+    """'Mar 2017  (S)' (Screener marks years shown standalone on a consolidated page) -> 'Mar 2017'; a clash keeps the first."""
+    out, seen = [], set()
+    for c in cols:
+        c = re.sub(r"\s*\(S\)\s*$", "", str(c)).strip()
+        while c in seen:
+            c += " "
+        seen.add(c)
+        out.append(c)
+    return out
+
+
 def table(soup, sec_id):
     sec = soup.find("section", id=sec_id)
     if not sec or not sec.find("table"):
@@ -33,6 +45,7 @@ def table(soup, sec_id):
     # "Sales\xa0+" -> "Sales"; "CFO/EBITDA  Share of operating profit..." (tooltip text) -> "CFO/EBITDA"
     t.index = [re.split(r"\s{2,}", str(s).replace("\xa0", " "))[0].rstrip(" +").strip() for s in t.index]
     t = t.rename(index=ALIASES)
+    t.columns = year_labels(t.columns)
     return t.apply(lambda c: pd.to_numeric(c.astype(str).str.replace(",", "").str.replace("%", ""), errors="coerce"))
 
 

@@ -433,6 +433,17 @@ def _update():
         breakouts.scan()
     except Exception as e:
         print(f"   breakout scan skipped: {e}")
+    try:  # long-term lens: re-score cached Screener pages; refresh the pages of what you hold or watch when old
+        import fundamentals
+        import longterm
+        import portfolio as _pf
+        w = DATA / "watchlist.txt"
+        mine = set(_pf.open_positions().symbol) | set(w.read_text().split() if w.exists() else [])
+        for s in sorted(mine):
+            fundamentals.get(s, max_age_days=longterm.PAGE_AGE)
+        longterm.score()
+    except Exception as e:
+        print(f"   long-term scores skipped: {e}")
     import portfolio
     try:
         portfolio.refresh_actions(set(portfolio.load(actions=False).symbol))  # bonuses/splits change share counts

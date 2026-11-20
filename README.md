@@ -211,6 +211,51 @@ the stop loss (SL) and the targets, then shows:
 If there is no chart pattern near the price, it says so: the tip may be based on results, news or the sector
 instead.
 
+### long-term: for money you'll leave alone for 4–5 years
+
+The rest of Rising looks about six months ahead. This tab is for long-term money, like a small amount put in every
+month and left for years. It answers one question honestly: **what, known on the day you buy, came before a stock
+doubling over the next 5 years?**
+
+It was tested on 1,078 NSE companies. Each was judged only on what was public on 30 September of 2017, 2018, 2019,
+2020 and 2021, then followed for 5 years: 3,819 cases in all. Every result is compared with stocks bought **on the
+same day**, because the year you buy matters enormously (28% of stocks doubled from 2017, 74% from 2019).
+
+| What you did | Doubled in 5 years | Lost money |
+|---|---:|---:|
+| Bought one stock | 47% | 23% |
+| **Split the money equally over 5 stocks** | **67%** | **4%** |
+| Split it over 5 stocks that were cheap for their sales | 74% | 3% |
+
+What it found, in plain words:
+
+1. **Spreading your money mattered more than picking.** One stock lost money about 1 time in 5; five stocks, about
+   1 time in 25.
+2. **The price you pay mattered most.** Stocks that were cheap for their sales (price-to-sales) doubled more often
+   than the other stocks bought the same day, in every one of the 5 years.
+3. **"Good company" checks on their own did not raise the chance of doubling.** Steady sales, a high return on
+   capital and low debt were usually already priced in. They did make a 50% fall a little less likely.
+4. **Loss-making companies** lost money most often (34%).
+5. **Nothing is a sure thing.** The best odds of a single stock doubling were about 6 in 10.
+
+The tab has three views:
+
+- **what the test found**: the chart and tables above, with every check's result.
+- **check a stock**: six yes/no questions anyone can read (Is it selling more every year? Is the profit real cash?)
+  with the actual numbers, where its price sits among today's stocks (cheap, middle or expensive), and how past
+  stocks in the same group did.
+- **my long-term stocks**: your open positions through the same lens, and how spread out your money is.
+
+Be careful with these numbers: only companies still listed today are in the data (ones that went bust are missing,
+which flatters the "cheap" result), and 2017–2026 was a period that favoured cheap and smaller companies.
+
+**Setup (once):** the scores need each company's yearly results from Screener.in. Run this once (about an hour; if it
+stops, run it again and it continues). After that, every **update data** keeps the scores current.
+
+```bash
+python longterm.py fetch
+```
+
 ### stock: one company, fully explained
 
 ![Company snapshot: what the company does and five verdict meters](docs/screenshots/stock.png)
@@ -582,6 +627,7 @@ flowchart TD
 | `portfolio.py` | Trade ledger, tradebook import, bonuses and splits, positions and round trips (FIFO), cost estimates, entry-day labels |
 | `breakouts.py` | Box, long base, trendline and swing-line detectors, live scan, grades and plans; results in `breakout_evidence.json` |
 | `long_history.py` | Optional one-time download of 2006–2022 daily prices from Upstox, joined onto the app's own prices |
+| `longterm.py` | The long-term lens: the long-term lab's checks and groups applied to today's stocks; results in `longterm_evidence.json` |
 | `tips.py` | Reads a pasted stock tip (symbol, CMP, buy range, stop, targets) |
 | `viz.py` | Every chart and the colour palette |
 | `research.py` | The 3-year study behind the labels and the steadiness score |
