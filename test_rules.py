@@ -1,3 +1,4 @@
+import numpy as np
 """Self-check for the status + exit rules. Run: python test_rules.py"""
 import pandas as pd
 
@@ -137,10 +138,15 @@ pg = {"tables": {
     "cashflow": pd.DataFrame({y: [11 * 1.2 ** i] for i, y in enumerate(yrs)}, index=["Cash from Operating Activity"]),
     "ratios": pd.DataFrame({y: [20] for y in yrs}, index=["ROCE %"])}}
 _t = longterm.traits(longterm.tables(pg), pd.Timestamp("2026-11-20"))
-_d = longterm._finish(pd.DataFrame([dict(symbol="X", mcap=500.0, price=10.0, past_1y=.2, turnover_cr=1.0, **_t)]))
+_x = {k: v for k, v in longterm.extra(longterm.tables(pg), pd.Timestamp("2026-11-20")).items() if k != "profit_hist"}
+_d = longterm._finish(pd.DataFrame([dict(symbol="X", mcap=500.0, price=10.0, past_1y=.2, past_12_1=.1, above_200=1.0,
+                                         pe_own=np.nan, turnover_cr=1.0, **_t, **_x)]))
+assert _d.warnings.iloc[0] == "" and "profit up 15%+ last year" in _d.signals.iloc[0], (_d.warnings.iloc[0], _d.signals.iloc[0])
 assert _d.core.iloc[0] == 6 and not _d.fin.iloc[0], _d.T
 assert abs(_t["sales_g3"] - .2) < 1e-9 and _t["loss_years"] == 0 and abs(_t["de"] - .2) < 1e-9
 print("long-term checks ok")
-_tt = pd.DataFrame(dict(ps_rank=[.1, .1, .8, .8, .5, .9], core=[5, 2, 3, 5, 6, 1], pe=[10, 12, 30, 80, None, 90], past_1y=[0, 0, .2, .2, 0, 2]))
-assert list(longterm.tier(_tt)) == [1, 2, 3, 4, 5, 6], list(longterm.tier(_tt))
+_tt = pd.DataFrame(dict(ps_rank=[.1, .1, .1, .8, .8, .5, .9], core=[5, 5, 2, 3, 5, 6, 1], pe=[10, 10, 12, 30, 80, None, 90],
+                       past_1y=[0, 0, 0, .2, .2, 0, 2], fscore=[7, 6, 3, 5, 5, 5, 5], int_cover=[9, 9, 9, 9, 9, 9, 9],
+                       debt=[1] * 7, n_signals=[3, 2, 4, 0, 0, 0, 0]))
+assert list(longterm.tier(_tt)) == [1, 2, 3, 4, 5, 6, 7], list(longterm.tier(_tt))  # weak F-score: not "healthy", just cheap
 print("long-term tiers ok")

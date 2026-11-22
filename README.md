@@ -238,22 +238,35 @@ What it found, in plain words:
 4. **Loss-making companies** lost money most often (34%).
 5. **Nothing is a sure thing.** The best odds of a single stock doubling were about 6 in 10.
 
-The tab has four views:
+The tab has four views. It opens on the list:
 
 - **list**: like the board, but for long-term money. Every stock is placed in the best tested group it belongs to,
-  in order of past odds, with the odds shown beside each group:
+  in order of past odds (± = compared with stocks bought the same day):
 
-  | Group | What it means | Doubled in 5 yrs | Lost money |
-  |---|---|---:|---:|
-  | 1. cheap + strong | cheap for its sales, 4+ of 6 good-company checks, profitable | 59% | 15% |
-  | 2. cheap | cheap for its sales and profitable | 55% | 20% |
-  | 3. fair price | P/E under 40, not already up 100%+ in a year | 54% | 16% |
-  | 4. strong but pricey | 4+ good-company checks, but not cheap | 47% | 19% |
-  | 5. loss-making | made a loss in its latest year | 44% | 34% |
+  | Group | What it means | Doubled in 5 yrs | Lost money | 5 such stocks: lost money |
+  |---|---|---:|---:|---:|
+  | 1. cheap + healthy + improving | cheap for its sales, F-score 6+ of 9, profitable, pays its interest, 3+ of 5 improving signs | 53% (+8) | 18% (−6) | 1% |
+  | 2. cheap + healthy | the same, with 2 improving signs | 52% (+6) | 18% (−6) | 1% |
+  | 3. cheap | cheap for its sales and profitable | 55% (+7) | 19% (−4) | 2% |
+  | 4. fair price | P/E under 40, not already up 100%+ in a year | 54% (+3) | 16% (−4) | 2% |
+  | 5. strong but pricey | 4+ good-company checks, but not cheap | 47% (−5) | 19% (−1) | 4% |
+  | 6. loss-making | made a loss in its latest year | 43% (−1) | 34% (+9) | 10% |
 
-  Within a group, the cheapest for its sales comes first. Filters for group and a max price. It's a list of groups
-  with better past odds, not a buy list: the cheapest-for-sales names are often low-margin traders and distributors,
-  so check what the company does before buying.
+  - **F-score** (Piotroski): 9 yes/no checks that the business got healthier over the last year (profit, cash, return
+    on assets, debt, margins, sales per rupee of assets, no new shares). Indian studies report it separating winning
+    cheap stocks from value traps.
+  - **Improving signs** (5): growth speeding up, profit up 15%+, price above its 200-day average, a strong 12-month
+    trend, and a P/E below its own usual level.
+  - **Warnings**, shown beside each stock and hidden by default: weak F-score, can barely pay interest, falling knife,
+    price crashed 50%+ in a year, already up 150%+ in a year, many new shares, tiny or penny, loss-making. In the
+    test, each raised the chance of losing money. Two more are live only (there's no history to test them on):
+    NSE's ASM/GSM watch lists, and serious filings (insolvency, forensic audit, SEBI orders, an auditor resigning).
+
+  How this was tested: the rules were chosen on buy years 2017–2020 only, then checked once on hidden years 2021 and
+  2022. "Cheap + healthy + improving" beat stocks bought the same day in every training year and in both hidden years,
+  mostly by losing less: fewer losses and fewer 50% crashes. In a simulation of ₹1,000 a month from Oct 2017 to Sep 2022,
+  spread over 5 stocks a month, every tested group beat random picks (₹60,000 became about ₹2.4 lakh vs ₹2.05 lakh),
+  though plain "cheap" ended slightly ahead in that rally. It's a list of groups with better past odds, not a buy list.
 - **what the test found**: the chart and tables above, with every check's result.
 - **check a stock**: six yes/no questions anyone can read (Is it selling more every year? Is the profit real cash?)
   with the actual numbers, whether it made a profit in its latest year, where its price sits among today's stocks
