@@ -238,12 +238,26 @@ What it found, in plain words:
 4. **Loss-making companies** lost money most often (34%).
 5. **Nothing is a sure thing.** The best odds of a single stock doubling were about 6 in 10.
 
-The tab has three views:
+The tab has four views:
 
+- **list**: like the board, but for long-term money. Every stock is placed in the best tested group it belongs to,
+  in order of past odds, with the odds shown beside each group:
+
+  | Group | What it means | Doubled in 5 yrs | Lost money |
+  |---|---|---:|---:|
+  | 1. cheap + strong | cheap for its sales, 4+ of 6 good-company checks, profitable | 59% | 15% |
+  | 2. cheap | cheap for its sales and profitable | 55% | 20% |
+  | 3. fair price | P/E under 40, not already up 100%+ in a year | 54% | 16% |
+  | 4. strong but pricey | 4+ good-company checks, but not cheap | 47% | 19% |
+  | 5. loss-making | made a loss in its latest year | 44% | 34% |
+
+  Within a group, the cheapest for its sales comes first. Filters for group and a max price. It's a list of groups
+  with better past odds, not a buy list: the cheapest-for-sales names are often low-margin traders and distributors,
+  so check what the company does before buying.
 - **what the test found**: the chart and tables above, with every check's result.
 - **check a stock**: six yes/no questions anyone can read (Is it selling more every year? Is the profit real cash?)
-  with the actual numbers, where its price sits among today's stocks (cheap, middle or expensive), and how past
-  stocks in the same group did.
+  with the actual numbers, whether it made a profit in its latest year, where its price sits among today's stocks
+  (cheap, middle or expensive), and how past stocks in the same group did.
 - **my long-term stocks**: your open positions through the same lens, and how spread out your money is.
 
 Be careful with these numbers: only companies still listed today are in the data (ones that went bust are missing,

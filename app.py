@@ -1278,10 +1278,52 @@ def longterm_tab():
     show(f'<div class="note">for money you will leave alone for 4–5 years. {LE["stocks"]:,} NSE companies were judged only on what '
          f'was public on 30 Sep 2017, 2018, 2019, 2020 and 2021, then followed for 5 years (long-term lab). '
          f'research tool, not advice.</div>')
-    lv = st.segmented_control("view", ["what the test found", "check a stock", "my long-term stocks"],
-                              default="what the test found", key="lt_view", label_visibility="collapsed") or "what the test found"
+    lv = st.segmented_control("view", ["list", "check a stock", "my long-term stocks", "what the test found"],
+                              default="list", key="lt_view", label_visibility="collapsed") or "list"
 
-    if lv == "what the test found":
+    if lv == "list":
+        LS = longterm_scores()
+        if LS.empty:
+            show('<div class="note">no long-term scores yet: run <b>python longterm.py fetch</b> once (about an hour), '
+                 'then each <b>update data</b> keeps them current.</div>')
+            return
+        T = longterm.TIERS
+        f1, f2, f3 = st.columns([3, 1, 1])
+        pick_t = f1.multiselect("groups", [t[0] for t in T], default=[t[0] for t in T[:3]], key="lt_tiers")
+        max_px = f2.number_input("max price ₹", 0, 100000, 0, 100, key="lt_maxpx", help="0 = no limit")
+        liquid = f3.checkbox("only stocks like the ones tested", True, key="lt_liquid",
+                             help="₹25 lakh+ traded a day, and no banks or lenders: the odds were measured on these")
+        d = LS[LS.studied] if liquid else LS
+        d = d.assign(tier=longterm.tier(d)).merge(q("select symbol, company_name, sector from instruments"), on="symbol", how="left")
+        sec("the groups, best past odds first", "each stock sits in the best group it qualifies for · odds = 5 years later, "
+                                                 "for stocks bought on each test date")
+        rows = []
+        for i, (name, meaning, ev, _) in enumerate(T, 1):
+            g, b = LG[ev], LG[ev].get("basket5") or {}
+            rows.append(dict(t=f"<b>{i}. {esc(name)}</b>", _wrap=esc(meaning), n=f"{int((d.tier == i).sum()):,}",
+                             dd=lt_p(g["doubled"]), l=lt_p(g["lost"]), bd=lt_p(b.get("doubled")), bl=lt_p(b.get("lost"))))
+        rows.append(dict(t='<span class="dim">for comparison: every stock</span>', _wrap="", n=f"{len(d):,}",
+                         dd=lt_p(lt_all["doubled"]), l=lt_p(lt_all["lost"]), bd=lt_p(lt_all["basket5"]["doubled"]),
+                         bl=lt_p(lt_all["basket5"]["lost"])))
+        show(table(rows, [("t", "group"), ("_wrap", "what it means"), ("n", "stocks now"), ("dd", "doubled"),
+                          ("l", "lost money"), ("bd", "×5 doubled"), ("bl", "×5 lost")], numeric={"n", "dd", "l", "bd", "bl"}))
+        v = d[d.tier.isin([i for i, t in enumerate(T, 1) if t[0] in pick_t])]
+        if max_px:
+            v = v[v.price <= max_px]
+        v = v.sort_values(["tier", "ps_rank"])
+        sec("stocks", f"{len(v):,} · within a group, cheapest for its sales first · open any name in <b>check a stock</b>")
+        n_show = len(v) if st.toggle(f"show all {len(v):,}", False, key="lt_all") else min(30, len(v))
+        show(table([dict(t=esc(T[int(x.tier) - 1][0]), s=f"<b>{esc(x.symbol)}</b>", _wrap=esc(clip(x.company_name, 40)),
+                         sec_=esc(clip(x.sector, 24)) if isinstance(x.sector, str) else "–", p=num(x.price, 2), ps=lt_ps(x.ps_rank),
+                         c=f"{int(x.core)}/6", e=f"{x.pe:.0f}" if pd.notna(x.pe) else '<span class="dn">loss</span>', y=pct(x.past_1y))
+                    for x in v.head(n_show).itertuples()],
+                   [("t", "group"), ("s", "symbol"), ("_wrap", "company"), ("sec_", "sector"), ("p", "price"),
+                    ("ps", "price for sales"), ("c", "checks"), ("e", "P/E"), ("y", "1 year")], numeric={"p", "ps", "c", "e", "y"}))
+        show('<div class="note">a list of groups with better past odds, not a buy list. in the test, what helped most was '
+             'spreading money over 5+ stocks with equal amounts. the cheapest-for-sales names are often low-margin traders and '
+             'distributors: check what the company does, its filings and its debt before buying. research tool, not advice.</div>')
+
+    elif lv == "what the test found":
         show('<div class="kv">' + "".join(f"<div><span>{a}</span>{b}</div>" for a, b in [
             ("one stock: doubled in 5 yrs", f"<b>{lt_p(lt_all['doubled'])}</b>"),
             ("one stock: lost money", f'<b class="dn">{lt_p(lt_all["lost"])}</b>'),
@@ -1351,7 +1393,8 @@ def longterm_tab():
                 show('<div class="kv">' + "".join(f"<div><span>{a}</span>{b}</div>" for a, b in [
                     ("good-company checks", f"<b>{int(r['core'])} of 6</b>"),
                     ("price for its sales (1 = cheapest of 100)", f"<b>{lt_ps(r['ps_rank'])}</b>"),
-                    ("P/E", f"<b>{r['pe']:.0f}</b>" if pd.notna(r["pe"]) else '<b class="dn">loss-making</b>'),
+                    ("profit (latest year)", f'<b class="up">profitable</b> <span class="dim">· P/E {r["pe"]:.0f}</span>'
+                     if pd.notna(r["pe"]) else '<b class="dn">loss-making</b>'),
                     ("last 1 year", f"<b>{pct(r['past_1y'])}</b>"),
                     ("results up to", f"<b>{pd.Timestamp(r['fy']):%b %Y}</b>")]) + "</div>")
                 if not r["studied"]:
@@ -1375,9 +1418,9 @@ def longterm_tab():
                 for gn in ["every stock"] + [g for g in str(r["groups"]).split("; ") if g]:
                     g, b = LG[gn], LG[gn].get("basket5") or {}
                     label = f"<b>{esc(lt_gname(gn))}</b>" if gn != "every stock" else '<span class="dim">every stock (for comparison)</span>'
-                    rows.append(dict(g=label, d=lt_p(g["doubled"]), l=lt_p(g["lost"]), c=lt_p(g["crash"]),
+                    rows.append(dict(_wrap=label, d=lt_p(g["doubled"]), l=lt_p(g["lost"]), c=lt_p(g["crash"]),
                                      bd=lt_p(b.get("doubled")), bl=lt_p(b.get("lost"))))
-                show(table(rows, [("g", "group this stock is in"), ("d", "doubled"), ("l", "lost money"),
+                show(table(rows, [("_wrap", "group this stock is in"), ("d", "doubled"), ("l", "lost money"),
                                   ("c", "fell 50%+"), ("bd", "×5 doubled"), ("bl", "×5 lost")],
                            numeric={"d", "l", "c", "bd", "bl"}))
                 show('<div class="note">odds for a <i>group</i> of past stocks, not a forecast for this one. no group came close to a '

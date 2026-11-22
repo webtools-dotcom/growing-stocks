@@ -57,6 +57,29 @@ GROUPS = {
     "loss-making when bought": lambda d: d.pe.isna(),
 }
 
+# The list view: every stock sorted into the best tested group it belongs to (first match wins). Each tier shows the
+# past odds of the group it is named after, so nothing here is a new, untested rule.
+TIERS = [  # (name, plain meaning, evidence group, test)
+    ("cheap + strong", "cheap for its sales, 4+ of 6 good-company checks, profitable",
+     "cheap for its sales + 4 of 6 core checks", lambda d: (d.ps_rank <= .4) & (d.core >= 4) & d.pe.notna()),
+    ("cheap", "cheap for its sales and profitable, fewer checks passed",
+     "cheap for its sales (cheapest 40% by P/S)", lambda d: (d.ps_rank <= .4) & d.pe.notna()),
+    ("fair price", "P/E under 40 and not already up 100%+ in a year",
+     "P/E under 40 and not up 100%+ in a year", lambda d: (d.pe < 40) & (d.past_1y < 1)),
+    ("strong but pricey", "4+ of 6 good-company checks, but not cheap",
+     "4 of 6 core checks (quality alone)", lambda d: (d.core >= 4) & d.pe.notna()),
+    ("loss-making", "made a loss in its latest year",
+     "loss-making when bought", lambda d: d.pe.isna()),
+]
+
+
+def tier(d):
+    """-> tier number (1 = best past odds … len(TIERS)), or len(TIERS) + 1 for 'none of the tested groups'."""
+    out = pd.Series(len(TIERS) + 1, index=d.index)
+    for i, (_, _, _, f) in reversed(list(enumerate(TIERS, 1))):  # reversed: the first (best) match ends up on top
+        out[f(d).fillna(False).astype(bool)] = i
+    return out
+
 
 def evidence():
     return json.loads(EVIDENCE.read_text(encoding="utf-8"))

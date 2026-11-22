@@ -141,3 +141,6 @@ _d = longterm._finish(pd.DataFrame([dict(symbol="X", mcap=500.0, price=10.0, pas
 assert _d.core.iloc[0] == 6 and not _d.fin.iloc[0], _d.T
 assert abs(_t["sales_g3"] - .2) < 1e-9 and _t["loss_years"] == 0 and abs(_t["de"] - .2) < 1e-9
 print("long-term checks ok")
+_tt = pd.DataFrame(dict(ps_rank=[.1, .1, .8, .8, .5, .9], core=[5, 2, 3, 5, 6, 1], pe=[10, 12, 30, 80, None, 90], past_1y=[0, 0, .2, .2, 0, 2]))
+assert list(longterm.tier(_tt)) == [1, 2, 3, 4, 5, 6], list(longterm.tier(_tt))
+print("long-term tiers ok")
